@@ -34,7 +34,7 @@ AUTOR = "Ricardo Grez"
 EMPRESA = "SAIVAM"
 CONTRATO = "CMPC Mulchén"
 VERSION = "1.2"
-REVISION_CODIGO = "14-07-2026-R20-VERSION-1.2"
+REVISION_CODIGO = "14-07-2026-R21-MENU-SIN-CIRCULOS"
 
 print(
     f"[SSO] Ejecutando archivo corregido: {os.path.abspath(__file__)} "
@@ -2615,8 +2615,28 @@ section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked)
     box-shadow: 0 9px 21px rgba(16,185,129,.28), inset 0 0 18px rgba(255,255,255,.10) !important;
 }
 
-section[data-testid="stSidebar"] div[role="radiogroup"] label > div:first-child {
+section[data-testid="stSidebar"] div[role="radiogroup"] label > div:first-child,
+section[data-testid="stSidebar"] div[role="radiogroup"] label input[type="radio"],
+section[data-testid="stSidebar"] div[role="radiogroup"] label [role="radio"],
+section[data-testid="stSidebar"] div[role="radiogroup"] label svg,
+section[data-testid="stSidebar"] div[role="radiogroup"] label span[data-baseweb="radio"] {
     display: none !important;
+    width: 0 !important;
+    min-width: 0 !important;
+    height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}
+
+/* Elimina cualquier espacio reservado por el control circular del radio. */
+section[data-testid="stSidebar"] div[role="radiogroup"] label {
+    column-gap: 0 !important;
+}
+
+section[data-testid="stSidebar"] div[role="radiogroup"] label > div:last-child {
+    width: 100% !important;
+    margin-left: 0 !important;
+    padding-left: 0 !important;
 }
 
 section[data-testid="stSidebar"] div[role="radiogroup"] p {
