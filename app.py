@@ -34,7 +34,7 @@ AUTOR = "Ricardo Grez"
 EMPRESA = "SAIVAM"
 CONTRATO = "CMPC Mulchén"
 VERSION = "1.2"
-REVISION_CODIGO = "14-07-2026-R22-MENU-SIN-RADIO"
+REVISION_CODIGO = "14-07-2026-R23-MENU-CORREGIDO"
 
 print(
     f"[SSO] Ejecutando archivo corregido: {os.path.abspath(__file__)} "
@@ -2616,20 +2616,27 @@ section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked)
 }
 
 /*
-Oculta completamente el control circular nativo del st.radio.
-Se incluyen selectores para distintas versiones de Streamlit/BaseWeb.
+Oculta solamente el dibujo circular del radio.
+No se oculta el contenedor principal del label, porque ahí también
+se encuentra el texto del menú en algunas versiones de Streamlit.
 */
-section[data-testid="stSidebar"] div[role="radiogroup"] label > div:has(input[type="radio"]),
-section[data-testid="stSidebar"] div[role="radiogroup"] label > div:first-of-type,
-section[data-testid="stSidebar"] div[role="radiogroup"] label input[type="radio"],
-section[data-testid="stSidebar"] div[role="radiogroup"] label input[type="radio"] + div,
-section[data-testid="stSidebar"] div[role="radiogroup"] label [role="radio"],
-section[data-testid="stSidebar"] div[role="radiogroup"] label [data-baseweb="radio"],
-section[data-testid="stSidebar"] div[role="radiogroup"] label div[aria-hidden="true"] {
+section[data-testid="stSidebar"] div[role="radiogroup"]
+label input[type="radio"] {
+    position: absolute !important;
+    opacity: 0 !important;
+    width: 0 !important;
+    height: 0 !important;
+    pointer-events: none !important;
+}
+
+section[data-testid="stSidebar"] div[role="radiogroup"]
+label input[type="radio"] + div,
+section[data-testid="stSidebar"] div[role="radiogroup"]
+label input[type="radio"] ~ div[aria-hidden="true"],
+section[data-testid="stSidebar"] div[role="radiogroup"]
+label > div:first-child > div:first-child:not([data-testid="stMarkdownContainer"]) {
     display: none !important;
     visibility: hidden !important;
-    opacity: 0 !important;
-    position: absolute !important;
     width: 0 !important;
     min-width: 0 !important;
     max-width: 0 !important;
@@ -2640,24 +2647,26 @@ section[data-testid="stSidebar"] div[role="radiogroup"] label div[aria-hidden="t
     padding: 0 !important;
     border: 0 !important;
     overflow: hidden !important;
-    pointer-events: none !important;
 }
 
-section[data-testid="stSidebar"] div[role="radiogroup"] label::before,
-section[data-testid="stSidebar"] div[role="radiogroup"] label::after {
-    display: none !important;
-    content: none !important;
+/* Conserva siempre visibles el texto y los íconos del menú. */
+section[data-testid="stSidebar"] div[role="radiogroup"]
+label [data-testid="stMarkdownContainer"],
+section[data-testid="stSidebar"] div[role="radiogroup"]
+label [data-testid="stMarkdownContainer"] p {
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
 }
 
-/* El texto e ícono del menú ocupan todo el ancho, sin espacio reservado. */
 section[data-testid="stSidebar"] div[role="radiogroup"] label {
     column-gap: 0 !important;
     gap: 0 !important;
     padding-left: 12px !important;
 }
 
-section[data-testid="stSidebar"] div[role="radiogroup"] label > div:last-child,
-section[data-testid="stSidebar"] div[role="radiogroup"] label [data-testid="stMarkdownContainer"] {
+section[data-testid="stSidebar"] div[role="radiogroup"]
+label [data-testid="stMarkdownContainer"] {
     width: 100% !important;
     flex: 1 1 100% !important;
     margin-left: 0 !important;
