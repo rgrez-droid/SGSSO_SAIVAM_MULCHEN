@@ -48,8 +48,8 @@ st.markdown(
 AUTOR = "Ricardo Grez"
 EMPRESA = "SAIVAM"
 CONTRATO = "CMPC Mulchén"
-VERSION = "1.4.12"
-REVISION_CODIGO = "21-07-2026-R37-CAPACITACIONES-ALINEADA-SHEET"
+VERSION = "1.4.13"
+REVISION_CODIGO = "21-07-2026-R38-PRG-ESTADOS-DESDE-SHEET"
 
 print(
     f"[SSO] Ejecutando archivo corregido: {os.path.abspath(__file__)} "
@@ -525,17 +525,12 @@ def normalizar_estados(df):
 
 def preparar_programa_anual(df):
     """
-    Limpia y prepara la nueva estructura de la pestaña PRG_SSO_2026.
+    Limpia y prepara la pestaña PRG_SSO_2026.
 
-    Columnas esperadas:
-    Mes, Eje Trabajo, Actividad, Tipo Actividad, Fecha Programada,
-    Fecha Realización, Responsable, Estado, Evidencia y Observación.
-
-    El estado operacional se determina con prioridad en las fechas:
-    - Fecha de realización informada: Realizada.
-    - Fecha programada vencida y sin realización: Vencida.
-    - Fecha programada igual a hoy: En proceso.
-    - Fecha programada futura: Pendiente.
+    El campo Estado se toma directamente desde Google Sheets. La aplicación no
+    lo recalcula usando Fecha_Programada ni Fecha_Realizacion. De esta forma,
+    cada actividad mantiene exactamente la condición de gestión registrada en
+    la planilla: Cerrada, Pendiente o En proceso.
     """
     columnas = SHEETS["Programa_Anual"]["columnas"]
 
@@ -594,36 +589,23 @@ def preparar_programa_anual(df):
     mes_vacio = salida["Mes"].eq("") | salida["Mes"].str.lower().eq("nan")
     salida.loc[mes_vacio, "Mes"] = mes_desde_fecha.loc[mes_vacio].fillna("")
 
-    def calcular_estado_programa(fila):
-        fecha_programada = fila.get("Fecha_Programada", pd.NaT)
-        fecha_realizacion = fila.get("Fecha_Realizacion", pd.NaT)
-        estado_original = normalizar_texto(fila.get("Estado", ""))
+    def estado_desde_sheet(valor):
+        """Normaliza únicamente los tres estados utilizados en PRG_SSO_2026."""
+        estado = normalizar_texto(valor)
 
-        if pd.notna(fecha_realizacion):
-            return "Realizada"
-
-        # Compatibilidad con estados ingresados manualmente en la planilla.
-        if "cerr" in estado_original or "realiz" in estado_original:
-            return "Realizada"
-
-        if pd.notna(fecha_programada):
-            fecha_programada = fecha_programada.normalize()
-            if fecha_programada < HOY:
-                return "Vencida"
-            if fecha_programada == HOY:
-                return "En proceso"
-            return "Pendiente"
-
-        if "proceso" in estado_original or "gestion" in estado_original:
+        if "cerr" in estado or "realiz" in estado or "cumpl" in estado:
+            return "Cerrada"
+        if "proceso" in estado or "gestion" in estado:
             return "En proceso"
-        if "venc" in estado_original or "atras" in estado_original:
-            return "Vencida"
-        if "pend" in estado_original or "program" in estado_original:
+        if "pend" in estado or "program" in estado:
             return "Pendiente"
 
+        # Una celda vacía se mantiene como pendiente para que el registro no se
+        # contabilice erróneamente como cerrado por la fecha de realización.
         return "Pendiente"
 
-    salida["Estado"] = salida.apply(calcular_estado_programa, axis=1)
+    # Fuente única de verdad: columna Estado de la planilla.
+    salida["Estado"] = salida["Estado"].apply(estado_desde_sheet)
 
     # Periodo para filtros y ordenamiento del panel.
     salida["Año"] = salida["Fecha_Programada"].dt.year
@@ -1624,7 +1606,7 @@ def crear_datos_ejemplo(nombre_hoja):
                 "Fecha_Programada": "20/01/2026",
                 "Fecha_Realizacion": "20/01/2026",
                 "Responsable": "María Araya",
-                "Estado": "Realizada",
+                "Estado": "Cerrada",
                 "Evidencia": "Carpeta/PRG_SSO_2026/Enero",
                 "Observacion": "Actividad ejecutada según programa.",
             },
@@ -1910,9 +1892,8 @@ def cargar_datos():
             df = crear_datos_ejemplo(nombre_hoja)
             fuente = "Datos de ejemplo"
 
-        # La pestaña PRG_SSO_2026 utiliza una estructura propia basada en
-        # Fecha Programada y Fecha Realización. Se procesa por separado para
-        # no reemplazar el campo Mes ni convertir "Realizada" en "Cerrada".
+        # La pestaña PRG_SSO_2026 se procesa por separado para conservar el
+        # campo Mes y respetar el Estado informado directamente en Google Sheets.
         if nombre_hoja == "Programa_Anual":
             df = preparar_programa_anual(df)
             datos[nombre_hoja] = df
@@ -6546,11 +6527,10 @@ def pagina_programa_anual(datos, filtros):
 
     total = len(df)
     estados_norm = df["Estado"].fillna("").apply(normalizar_texto)
-    realizadas = int(estados_norm.str.contains(r"realiz|cerr", regex=True, na=False).sum())
-    vencidas = int(estados_norm.str.contains(r"venc|atras", regex=True, na=False).sum())
-    en_proceso = int(estados_norm.str.contains(r"proceso|gestion", regex=True, na=False).sum())
-    pendientes = int(estados_norm.str.contains(r"pend|program", regex=True, na=False).sum())
-    cumplimiento = (realizadas / total * 100) if total else 0.0
+    cerradas = int(estados_norm.eq("cerrada").sum())
+    pendientes = int(estados_norm.eq("pendiente").sum())
+    en_proceso = int(estados_norm.eq("en_proceso").sum())
+    cumplimiento = (cerradas / total * 100) if total else 0.0
     tipos = df["Tipo_Actividad"].nunique() if "Tipo_Actividad" in df.columns else 0
 
     c1, c2, c3, c4 = st.columns(4)
@@ -6564,23 +6544,23 @@ def pagina_programa_anual(datos, filtros):
     with c2:
         kpi_card(
             "✅",
-            "Actividades realizadas",
-            numero(realizadas),
-            "Con fecha de realización",
+            "Actividades cerradas",
+            numero(cerradas),
+            f"{porcentaje(cumplimiento)} de cumplimiento",
         )
     with c3:
         kpi_card(
-            "⚠️",
-            "Actividades vencidas",
-            numero(vencidas),
-            f"{pendientes} pendientes · {en_proceso} en proceso",
+            "🟠",
+            "Actividades pendientes",
+            numero(pendientes),
+            "Estado informado en Sheet",
         )
     with c4:
         kpi_card(
-            "📊",
-            "Cumplimiento global",
-            porcentaje(cumplimiento),
-            "Realizadas / programadas",
+            "🔵",
+            "Actividades en proceso",
+            numero(en_proceso),
+            "Estado informado en Sheet",
         )
 
     col_a, col_b = st.columns(2)
