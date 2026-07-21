@@ -1,5 +1,6 @@
 import base64
 import glob
+import io
 import mimetypes
 import os
 import re
@@ -7,6 +8,7 @@ from datetime import datetime
 from urllib.parse import quote
 
 import pandas as pd
+import requests
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
@@ -30,11 +32,24 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# Reduce conflictos del DOM provocados por la traducción automática del navegador.
+st.markdown(
+    """
+    <meta name="google" content="notranslate">
+    <style>
+        html, body, [data-testid="stAppViewContainer"] {
+            translate: no;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 AUTOR = "Ricardo Grez"
 EMPRESA = "SAIVAM"
 CONTRATO = "CMPC Mulchén"
-VERSION = "1.2"
-REVISION_CODIGO = "14-07-2026-R23-MENU-CORREGIDO"
+VERSION = "1.4.12"
+REVISION_CODIGO = "21-07-2026-R37-CAPACITACIONES-ALINEADA-SHEET"
 
 print(
     f"[SSO] Ejecutando archivo corregido: {os.path.abspath(__file__)} "
@@ -51,7 +66,12 @@ FECHA_INICIO_SIN_ACCIDENTES_DEFAULT = "01/04/2023"
 # Documento principal que alimenta toda la aplicación.
 # La planilla debe estar compartida como "Cualquier persona con el enlace:
 # Lector" o publicada en la web.
-GOOGLE_SHEET_ID = "1vMT3Xd68RR4KVIMRU5eaGhBtQxc4OcfI"
+GOOGLE_SHEET_ID = "1GrwPn86i7dYnYxkLrr-bVeueUSh5eXqL"
+
+# Identificador exacto de la pestaña "Cumplimientos SSO".
+# Se obtiene desde el parámetro gid del enlace compartido por el usuario.
+# Leer esta pestaña por GID evita depender del nombre visible de la hoja.
+CUMPLIMIENTOS_SSO_GID = "745436880"
 
 # Si una pestaña no puede leerse desde Google Sheets, el sistema conserva
 # como respaldo la lectura desde el archivo Excel local.
@@ -62,6 +82,7 @@ ARCHIVOS_EXCEL_POSIBLES = [
     "Base_Datos_SSO_SAIVAM_Mulchen.xlsx",
     # Compatibilidad con versiones anteriores.
     "Base_Datos_SGS_SAIVAM_Mulchen.xlsx",
+    "Base_Datos_SGS_SAIVAM_Mulchen (1).xlsx",
     # También reconoce la versión prototipo creada inicialmente.
     "Base_Datos_SGS_SAIVAM_Mulchen_Prototipo.xlsx",
     "BASE SGS SAIVAM MULCHEN.xlsx",
@@ -92,19 +113,18 @@ HOY = pd.Timestamp.today().normalize()
 # =========================================================
 
 SHEETS = {
-    "OPS": {
-        "nombres": ["Observaciones_SSO_BAPP", "Observaciones SSO y BAPP", "OPS", "Observaciones", "Observaciones_Preventivas"],
-        "secret": "ops_url",
-        "columnas": [
-            "Fecha", "Área", "Trabajador", "Supervisor", "Actividad",
-            "Tipo_Observacion", "Conducta_Segura", "Conducta_Riesgo",
-            "Medida_Correctiva", "Responsable", "Fecha_Compromiso",
-            "Estado", "Observacion",
-        ],
-    },
     "Incidentes": {
-        "nombres": ["Reportabilidad", "Incidentes", "Eventos", "Seguridad"],
-        "secret": "incidentes_url",
+        # La pestaña visible en Google Sheets se llama "Reportabilidad",
+        # pero internamente la aplicación conserva la clave "Incidentes"
+        # para mantener compatibilidad con el panel general y sus indicadores.
+        "nombres": [
+            "Reportabilidad",
+            "Incidentes",
+            "Incidentes y reportes",
+            "Incidentes_y_Reportes",
+            "Reportes",
+        ],
+        "secret": "reportabilidad_url",
         "columnas": [
             "Fecha",
             "Área",
@@ -117,38 +137,51 @@ SHEETS = {
             "Ruta_Link",
         ],
     },
-    "Inspecciones": {
-        "nombres": ["Inspecciones_Seguridad", "Inspecciones de Seguridad", "Inspecciones", "Checklist", "Checklists"],
-        "secret": "inspecciones_url",
-        "columnas": [
-            "Fecha", "Área", "Tipo_Inspeccion", "Resultado", "Hallazgos",
-            "Responsable", "Fecha_Compromiso", "Estado", "Observacion",
+    "Cumplimientos_SSO": {
+        "nombres": [
+            "Cumplimientos SSO",
+            "Cumplimiento SSO",
+            "Cumplimientos_SSO",
+            "Cumplimiento_SSO",
         ],
-    },
-    "Plan_Accion": {
-        "nombres": ["Control_Operacional", "Control Operacional", "Plan_Accion", "Plan de Acción", "Acciones_Correctivas"],
-        "secret": "plan_accion_url",
+        "secret": "cumplimientos_sso_url",
         "columnas": [
-            "Fecha", "Origen", "Área", "Hallazgo", "Accion_Correctiva",
-            "Responsable", "Fecha_Compromiso", "Estado", "Evidencia",
-            "Observacion",
+            "Observador", "Actividad",
+            "ENE", "RE_ENE", "FEB", "RE_FEB", "MAR", "RE_MAR",
+            "ABR", "RE_ABR", "MAY", "RE_MAY", "JUN", "RE_JUN",
+            "JUL", "RE_JUL", "AGO", "RE_AGO", "SEP", "RE_SEP",
+            "OCT", "RE_OCT", "NOV", "RE_NOV", "DIC", "RE_DIC",
         ],
     },
     "Capacitaciones": {
         "nombres": ["Capacitaciones", "Charlas", "Charlas_Capacitaciones"],
         "secret": "capacitaciones_url",
+        # Estructura exacta de la pestaña "Capacitaciones" en Google Sheets.
         "columnas": [
-            "Fecha", "Tema", "Tipo", "Área", "Relator", "Asistentes",
-            "Vencimiento", "Estado", "Observacion",
+            "Fecha", "Tema", "Tipo", "Área", "Responsable",
+            "Vencimiento", "Estado", "Observacion", "Evidencia",
         ],
     },
     "Programa_Anual": {
-        "nombres": ["PRG_SSO_2026", "PRG SSO 2026", "Programa_Anual", "Programa Anual de Seguridad"],
+        "nombres": [
+            "PRG_SSO_2026",
+            "PRG SSO 2026",
+            "Programa_Anual",
+            "Programa Anual de Seguridad",
+        ],
         "secret": "programa_anual_url",
+        # Estructura vigente de la pestaña PRG_SSO_2026.
         "columnas": [
-            "Fecha", "Mes", "Actividad", "Tipo_Actividad", "Área",
-            "Responsable", "Meta", "Resultado", "Cumplimiento", "Estado",
-            "Evidencia", "Observacion",
+            "Mes",
+            "Eje_Trabajo",
+            "Actividad",
+            "Tipo_Actividad",
+            "Fecha_Programada",
+            "Fecha_Realizacion",
+            "Responsable",
+            "Estado",
+            "Evidencia",
+            "Observacion",
         ],
     },
     "Reconocimientos": {
@@ -299,6 +332,13 @@ def normalizar_columnas_dataframe(df):
         "trabajador": "Trabajador",
         "supervisor": "Supervisor",
         "actividad": "Actividad",
+        "mes": "Mes",
+        "eje_trabajo": "Eje_Trabajo",
+        "ejetrabajo": "Eje_Trabajo",
+        "fecha_programada": "Fecha_Programada",
+        "fechaprogramada": "Fecha_Programada",
+        "fecha_realizacion": "Fecha_Realizacion",
+        "fecharealizacion": "Fecha_Realizacion",
         "tipo_observacion": "Tipo_Observacion",
         "tipoobservacion": "Tipo_Observacion",
         "tipo_observación": "Tipo_Observacion",
@@ -338,6 +378,7 @@ def normalizar_columnas_dataframe(df):
         "relator": "Relator",
         "asistentes": "Asistentes",
         "vencimiento": "Vencimiento",
+        "vencimient": "Vencimiento",
         "dias_para_vencer": "Dias_Para_Vencer",
         "días_para_vencer": "Dias_Para_Vencer",
         "diasparavencer": "Dias_Para_Vencer",
@@ -424,7 +465,14 @@ def asegurar_columnas(df, columnas):
 
 def preparar_fechas(df):
     salida = df.copy()
-    columnas_fecha = ["Fecha", "Fecha_Compromiso", "Vencimiento", "Proxima_Reposicion"]
+    columnas_fecha = [
+        "Fecha",
+        "Fecha_Compromiso",
+        "Vencimiento",
+        "Proxima_Reposicion",
+        "Fecha_Programada",
+        "Fecha_Realizacion",
+    ]
     for columna in columnas_fecha:
         if columna in salida.columns:
             salida[columna] = salida[columna].apply(convertir_fecha)
@@ -473,6 +521,127 @@ def normalizar_estados(df):
     salida["Estado"] = salida["Estado"].apply(estado_base)
     return salida
 
+
+
+def preparar_programa_anual(df):
+    """
+    Limpia y prepara la nueva estructura de la pestaña PRG_SSO_2026.
+
+    Columnas esperadas:
+    Mes, Eje Trabajo, Actividad, Tipo Actividad, Fecha Programada,
+    Fecha Realización, Responsable, Estado, Evidencia y Observación.
+
+    El estado operacional se determina con prioridad en las fechas:
+    - Fecha de realización informada: Realizada.
+    - Fecha programada vencida y sin realización: Vencida.
+    - Fecha programada igual a hoy: En proceso.
+    - Fecha programada futura: Pendiente.
+    """
+    columnas = SHEETS["Programa_Anual"]["columnas"]
+
+    if df is None:
+        return pd.DataFrame(columns=columnas)
+
+    salida = normalizar_columnas_dataframe(df.copy())
+    salida = asegurar_columnas(salida, columnas)
+    salida = preparar_fechas(salida)
+
+    # Elimina filas sin una actividad real. Esto evita incorporar filas de
+    # apoyo, listas auxiliares o formatos copiados hacia abajo en Google Sheets.
+    mascara_registro = pd.Series(False, index=salida.index)
+    for columna in [
+        "Actividad",
+        "Eje_Trabajo",
+        "Tipo_Actividad",
+        "Fecha_Programada",
+        "Fecha_Realizacion",
+        "Responsable",
+    ]:
+        valores = salida[columna]
+        mascara_registro = mascara_registro | (
+            valores.notna()
+            & valores.astype(str).str.strip().ne("")
+            & valores.astype(str).str.lower().ne("nan")
+            & valores.astype(str).str.lower().ne("nat")
+        )
+
+    salida = salida.loc[mascara_registro].copy()
+
+    if salida.empty:
+        return pd.DataFrame(columns=columnas)
+
+    # Limpieza de textos.
+    for columna in [
+        "Mes",
+        "Eje_Trabajo",
+        "Actividad",
+        "Tipo_Actividad",
+        "Responsable",
+        "Estado",
+        "Evidencia",
+        "Observacion",
+    ]:
+        salida[columna] = (
+            salida[columna]
+            .fillna("")
+            .astype(str)
+            .str.replace(r"\s+", " ", regex=True)
+            .str.strip()
+        )
+
+    # Completa el mes desde la fecha programada cuando la celda Mes está vacía.
+    mes_desde_fecha = salida["Fecha_Programada"].dt.month.map(MESES)
+    mes_vacio = salida["Mes"].eq("") | salida["Mes"].str.lower().eq("nan")
+    salida.loc[mes_vacio, "Mes"] = mes_desde_fecha.loc[mes_vacio].fillna("")
+
+    def calcular_estado_programa(fila):
+        fecha_programada = fila.get("Fecha_Programada", pd.NaT)
+        fecha_realizacion = fila.get("Fecha_Realizacion", pd.NaT)
+        estado_original = normalizar_texto(fila.get("Estado", ""))
+
+        if pd.notna(fecha_realizacion):
+            return "Realizada"
+
+        # Compatibilidad con estados ingresados manualmente en la planilla.
+        if "cerr" in estado_original or "realiz" in estado_original:
+            return "Realizada"
+
+        if pd.notna(fecha_programada):
+            fecha_programada = fecha_programada.normalize()
+            if fecha_programada < HOY:
+                return "Vencida"
+            if fecha_programada == HOY:
+                return "En proceso"
+            return "Pendiente"
+
+        if "proceso" in estado_original or "gestion" in estado_original:
+            return "En proceso"
+        if "venc" in estado_original or "atras" in estado_original:
+            return "Vencida"
+        if "pend" in estado_original or "program" in estado_original:
+            return "Pendiente"
+
+        return "Pendiente"
+
+    salida["Estado"] = salida.apply(calcular_estado_programa, axis=1)
+
+    # Periodo para filtros y ordenamiento del panel.
+    salida["Año"] = salida["Fecha_Programada"].dt.year
+    salida["Mes_Numero"] = salida["Fecha_Programada"].dt.month
+    salida["Periodo"] = (
+        salida["Mes"].replace("", "Sin mes")
+        + " "
+        + salida["Año"].fillna(0).astype(int).astype(str)
+    )
+
+    # Orden cronológico; las filas sin fecha quedan al final.
+    salida = salida.sort_values(
+        by=["Fecha_Programada", "Eje_Trabajo", "Actividad"],
+        ascending=[True, True, True],
+        na_position="last",
+    )
+
+    return salida.reset_index(drop=True)
 
 
 def preparar_certificaciones(df):
@@ -566,12 +735,7 @@ def buscar_archivo_excel():
 
 
 def construir_url_google_sheet(nombre_pestana):
-    """
-    Construye una URL CSV para una pestaña específica del Google Sheet.
-
-    Se utiliza el endpoint GViz porque permite leer cada pestaña por su nombre
-    usando un único ID de documento.
-    """
+    """Construye una URL CSV usando el nombre visible de una pestaña."""
     nombre_codificado = quote(str(nombre_pestana), safe="")
     return (
         f"https://docs.google.com/spreadsheets/d/{GOOGLE_SHEET_ID}/gviz/tq"
@@ -579,31 +743,580 @@ def construir_url_google_sheet(nombre_pestana):
     )
 
 
-def leer_hoja_desde_google(nombres_hoja):
+def construir_url_google_sheet_gid(gid):
+    """Construye una URL CSV usando el identificador estable de la pestaña."""
+    return (
+        f"https://docs.google.com/spreadsheets/d/{GOOGLE_SHEET_ID}/gviz/tq"
+        f"?tqx=out:csv&gid={quote(str(gid), safe='')}"
+    )
+
+
+def construir_url_exportacion_gid(gid):
+    """URL oficial de exportación CSV para una pestaña identificada por GID."""
+    return (
+        f"https://docs.google.com/spreadsheets/d/{GOOGLE_SHEET_ID}/export"
+        f"?format=csv&gid={quote(str(gid), safe='')}"
+    )
+
+
+def descargar_csv_google(url, header=0):
     """
-    Prueba los nombres alternativos configurados para cada módulo y devuelve
-    la primera pestaña válida encontrada.
+    Descarga un CSV de Google Sheets y detecta respuestas de inicio de sesión.
+
+    El navegador puede abrir una planilla privada porque el usuario tiene una
+    sesión de Google activa. Streamlit, pandas y requests no reciben esa sesión,
+    por lo que la hoja debe estar compartida como lector mediante enlace o debe
+    utilizarse autenticación con una cuenta de servicio.
+    """
+    respuesta = requests.get(
+        url,
+        timeout=30,
+        allow_redirects=True,
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 Chrome/124 Safari/537.36"
+            )
+        },
+    )
+    respuesta.raise_for_status()
+
+    texto = respuesta.content.decode("utf-8-sig", errors="replace")
+    inicio = texto.lstrip().lower()[:1500]
+    url_final = respuesta.url.lower()
+
+    respuesta_privada = (
+        "accounts.google.com" in url_final
+        or "serviceLogin".lower() in inicio
+        or "sign in" in inicio
+        or "iniciar sesión" in inicio
+        or inicio.startswith("<!doctype html")
+        or inicio.startswith("<html")
+    )
+
+    if respuesta_privada:
+        raise PermissionError(
+            "Google devolvió una página de inicio de sesión en lugar del CSV. "
+            "La planilla no está disponible para lectura anónima."
+        )
+
+    return pd.read_csv(io.StringIO(texto), header=header)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def descargar_libro_google_xlsx(sheet_id):
+    """Descarga el Google Sheet completo como XLSX para usarlo como respaldo."""
+    if not sheet_id:
+        return b""
+
+    url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=xlsx"
+    respuesta = requests.get(
+        url,
+        timeout=35,
+        allow_redirects=True,
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 Chrome/124 Safari/537.36"
+            )
+        },
+    )
+    respuesta.raise_for_status()
+
+    contenido = respuesta.content
+    inicio = contenido[:1500].decode("utf-8", errors="ignore").lstrip().lower()
+    tipo = respuesta.headers.get("content-type", "").lower()
+
+    if (
+        "accounts.google.com" in respuesta.url.lower()
+        or "text/html" in tipo
+        or inicio.startswith("<!doctype html")
+        or inicio.startswith("<html")
+        or "sign in" in inicio
+        or "iniciar sesión" in inicio
+    ):
+        raise PermissionError(
+            "Google devolvió una página de acceso en lugar del archivo XLSX. "
+            "La planilla debe estar compartida como lector mediante enlace."
+        )
+
+    if not contenido.startswith(b"PK"):
+        raise ValueError("Google no devolvió un archivo XLSX válido.")
+
+    return contenido
+
+
+def _dataframe_con_registros(df):
+    """Valida que la respuesta contenga filas útiles y no solo encabezados vacíos."""
+    if df is None or len(df.columns) == 0:
+        return False
+
+    if df.empty:
+        return False
+
+    prueba = df.copy()
+    prueba = prueba.replace(r"^\s*$", pd.NA, regex=True)
+    prueba = prueba.dropna(how="all")
+    return not prueba.empty
+
+
+def leer_hoja_desde_google(nombres_hoja, columnas_esperadas=None):
+    """
+    Lee una pestaña de Google Sheets mediante dos métodos:
+
+    1. CSV GViz utilizando el nombre visible de la pestaña.
+    2. Exportación XLSX del libro completo y lectura local de la pestaña.
+
+    El segundo método evita que módulos como Reportabilidad queden vacíos
+    cuando pandas no logra abrir directamente la URL CSV de Google.
     """
     if not USAR_GOOGLE_SHEETS or not GOOGLE_SHEET_ID:
         return None
 
+    errores = []
+    esperadas = {
+        normalizar_texto(columna)
+        for columna in (columnas_esperadas or [])
+    }
+
+    # Método 1: CSV por nombre de pestaña, descargado con requests.
     for nombre_pestana in nombres_hoja:
         url = construir_url_google_sheet(nombre_pestana)
 
         try:
-            df = pd.read_csv(url)
+            df = descargar_csv_google(url, header=0)
+            df = df.dropna(how="all").reset_index(drop=True)
 
-            # Google puede devolver una tabla vacía cuando el nombre no existe.
-            if df is not None and len(df.columns) > 0:
+            if not _dataframe_con_registros(df):
+                errores.append(f"{nombre_pestana}: respuesta CSV sin registros")
+                continue
+
+            if esperadas:
+                columnas_recibidas = {
+                    normalizar_texto(columna)
+                    for columna in df.columns
+                }
+                coincidencias = len(esperadas.intersection(columnas_recibidas))
+                if coincidencias < min(3, len(esperadas)):
+                    errores.append(
+                        f"{nombre_pestana}: encabezados no reconocidos "
+                        f"({coincidencias} coincidencias)"
+                    )
+                    continue
+
+            print(
+                f"[SSO] Pestaña '{nombre_pestana}' leída mediante CSV GViz. "
+                f"Registros: {len(df)}"
+            )
+            return df
+
+        except Exception as error:
+            errores.append(
+                f"{nombre_pestana}: {type(error).__name__}: {error}"
+            )
+
+    # Método 2: descarga del libro completo como XLSX.
+    try:
+        contenido = descargar_libro_google_xlsx(GOOGLE_SHEET_ID)
+        excel = pd.ExcelFile(io.BytesIO(contenido))
+        hojas = {normalizar_texto(h): h for h in excel.sheet_names}
+
+        for nombre_pestana in nombres_hoja:
+            clave = normalizar_texto(nombre_pestana)
+            if clave not in hojas:
+                continue
+
+            df = pd.read_excel(
+                io.BytesIO(contenido),
+                sheet_name=hojas[clave],
+            )
+            df = df.dropna(how="all").reset_index(drop=True)
+
+            if _dataframe_con_registros(df):
+                print(
+                    f"[SSO] Pestaña '{hojas[clave]}' leída desde la "
+                    f"exportación XLSX. Registros: {len(df)}"
+                )
                 return df
-        except Exception:
-            continue
 
+        errores.append("Exportación XLSX: no se encontró una pestaña compatible")
+
+    except Exception as error:
+        errores.append(f"Exportación XLSX: {type(error).__name__}: {error}")
+
+    print(
+        "[SSO] No fue posible leer la pestaña solicitada desde Google Sheets: "
+        + " | ".join(errores[-5:])
+    )
     return None
 
 
 
+
+MESES_CORTOS = [
+    "ENE", "FEB", "MAR", "ABR", "MAY", "JUN",
+    "JUL", "AGO", "SEP", "OCT", "NOV", "DIC",
+]
+
+# =========================================================
+# PERIODO OFICIAL PARA EL MÓDULO CUMPLIMIENTOS SSO
+# =========================================================
+# El usuario puede consultar el acumulado oficial de enero a julio de 2026
+# o revisar el año completo, incluyendo las metas y resultados de ENE a DIC.
+ANIO_CUMPLIMIENTOS = 2026
+MES_CORTE_CUMPLIMIENTOS = 7
+MESES_CUMPLIMIENTOS = MESES_CORTOS[:MES_CORTE_CUMPLIMIENTOS]
+PERIODO_CUMPLIMIENTOS = "Enero a julio de 2026"
+PERIODO_ANUAL_CUMPLIMIENTOS = "Año completo 2026"
+
+
+def _es_texto_valido(valor):
+    if pd.isna(valor):
+        return False
+    texto = str(valor).strip()
+    return texto != "" and texto.lower() not in {"nan", "none", "nat"}
+
+
+def _a_numero_cumplimiento(valor):
+    if not _es_texto_valido(valor):
+        return 0.0
+    if isinstance(valor, (int, float)):
+        return float(valor)
+    texto = str(valor).strip().replace("%", "").replace(" ", "")
+    texto = texto.replace(".", "").replace(",", ".")
+    try:
+        return float(texto)
+    except Exception:
+        return 0.0
+
+
+def normalizar_hoja_cumplimientos(df_raw):
+    """
+    Convierte la pestaña visual "Cumplimientos SSO" en una tabla utilizable.
+
+    Admite dos formatos:
+    1) La matriz visual del Excel original, con nombres combinados, encabezados
+       ENE/RE repetidos y filas Total Act., Total Realizadas y % Cumplimiento.
+    2) Una tabla normalizada con columnas Observador, Actividad, ENE, RE_ENE, etc.
+    """
+    columnas_salida = [
+        "Observador", "Actividad",
+        *[col for mes in MESES_CORTOS for col in (mes, f"RE_{mes}")],
+    ]
+
+    if df_raw is None or df_raw.empty:
+        return pd.DataFrame(columns=columnas_salida)
+
+    raw = df_raw.copy()
+    raw = raw.dropna(how="all").reset_index(drop=True)
+
+    # Caso 1: hoja ya normalizada.
+    claves = {normalizar_texto(c): c for c in raw.columns}
+    if "observador" in claves and "actividad" in claves:
+        renombrar = {
+            claves["observador"]: "Observador",
+            claves["actividad"]: "Actividad",
+        }
+        for mes in MESES_CORTOS:
+            posibles_meta = [normalizar_texto(mes), normalizar_texto(mes.lower())]
+            posibles_real = [
+                normalizar_texto(f"RE_{mes}"),
+                normalizar_texto(f"RE {mes}"),
+                normalizar_texto(f"REAL_{mes}"),
+                normalizar_texto(f"REAL {mes}"),
+            ]
+            for clave in posibles_meta:
+                if clave in claves:
+                    renombrar[claves[clave]] = mes
+                    break
+            for clave in posibles_real:
+                if clave in claves:
+                    renombrar[claves[clave]] = f"RE_{mes}"
+                    break
+
+        salida = raw.rename(columns=renombrar)
+        salida = asegurar_columnas(salida, columnas_salida)[columnas_salida]
+        for col in columnas_salida[2:]:
+            salida[col] = salida[col].apply(_a_numero_cumplimiento)
+        salida["Observador"] = salida["Observador"].astype(str).str.strip()
+        salida["Actividad"] = salida["Actividad"].astype(str).str.strip()
+        salida = salida[
+            salida["Observador"].ne("")
+            & salida["Actividad"].ne("")
+            & ~salida["Actividad"].apply(normalizar_texto).str.contains(
+                r"^total|cumplimiento", regex=True, na=False
+            )
+        ]
+        return salida.reset_index(drop=True)
+
+    # Caso 2: matriz visual. Ubica la columna de actividad por contenido.
+    puntajes = {}
+    patrones_actividad = (
+        "control operacional", "ops", "inspecciones", "check list",
+        "observaciones", "bapp",
+    )
+    for col in raw.columns:
+        serie = raw[col].astype(str).str.lower()
+        puntajes[col] = int(sum(serie.str.contains(p, regex=False, na=False).sum() for p in patrones_actividad))
+
+    if not puntajes or max(puntajes.values()) == 0:
+        return pd.DataFrame(columns=columnas_salida)
+
+    col_actividad = max(puntajes, key=puntajes.get)
+    posicion_actividad = list(raw.columns).index(col_actividad)
+    columnas_izquierda = list(raw.columns)[:posicion_actividad]
+    columnas_datos = list(raw.columns)[posicion_actividad + 1: posicion_actividad + 25]
+
+    registros = []
+    observador_actual = ""
+
+    for _, fila in raw.iterrows():
+        # Recupera el nombre del observador desde las celdas combinadas.
+        candidatos = []
+        for col in columnas_izquierda:
+            valor = fila.get(col, "")
+            if not _es_texto_valido(valor):
+                continue
+            texto = str(valor).strip()
+            clave = normalizar_texto(texto)
+            if clave.isdigit() or clave in {"actividades", "actividad"}:
+                continue
+            if any(token in clave for token in ["seguimiento", "cumplimiento", "total"]):
+                continue
+            # Nombres de personas normalmente contienen al menos un espacio.
+            if any(ch.isalpha() for ch in texto) and len(texto) >= 4:
+                candidatos.append(texto)
+        if candidatos:
+            observador_actual = max(candidatos, key=len)
+
+        actividad = fila.get(col_actividad, "")
+        if not _es_texto_valido(actividad):
+            continue
+
+        actividad = str(actividad).strip()
+        clave_actividad = normalizar_texto(actividad)
+
+        if (
+            not observador_actual
+            or clave_actividad in {"actividad", "actividades", "ene", "re"}
+            or clave_actividad.startswith("total")
+            or "cumplimiento" in clave_actividad
+        ):
+            continue
+
+        es_actividad = any(
+            patron in clave_actividad
+            for patron in [
+                "control_operacional", "ops", "inspeccion", "check_list",
+                "observacion", "bapp",
+            ]
+        )
+        if not es_actividad:
+            continue
+
+        valores = [_a_numero_cumplimiento(fila.get(col, 0)) for col in columnas_datos]
+        valores += [0.0] * (24 - len(valores))
+
+        registro = {
+            "Observador": observador_actual,
+            "Actividad": actividad,
+        }
+        for i, mes in enumerate(MESES_CORTOS):
+            registro[mes] = valores[i * 2]
+            registro[f"RE_{mes}"] = valores[i * 2 + 1]
+        registros.append(registro)
+
+    salida = pd.DataFrame(registros, columns=columnas_salida)
+    if salida.empty:
+        return salida
+
+    salida["Observador"] = salida["Observador"].astype(str).str.strip()
+    salida["Actividad"] = salida["Actividad"].astype(str).str.strip()
+    return salida.reset_index(drop=True)
+
+
+def leer_cumplimientos_desde_google(nombres_hoja):
+    """
+    Lee la matriz de Cumplimientos SSO desde Google Sheets.
+
+    Prioridad:
+    1. Exportación CSV por GID.
+    2. Consulta GViz por GID.
+    3. Consulta GViz por nombres alternativos.
+    """
+    if not USAR_GOOGLE_SHEETS or not GOOGLE_SHEET_ID:
+        return None
+
+    intentos = []
+
+    if CUMPLIMIENTOS_SSO_GID:
+        intentos.extend([
+            ("Exportación CSV por GID", construir_url_exportacion_gid(CUMPLIMIENTOS_SSO_GID)),
+            ("GViz por GID", construir_url_google_sheet_gid(CUMPLIMIENTOS_SSO_GID)),
+        ])
+
+    intentos.extend(
+        (f"GViz por nombre: {nombre}", construir_url_google_sheet(nombre))
+        for nombre in nombres_hoja
+    )
+
+    errores = []
+
+    for metodo, url in intentos:
+        try:
+            raw = descargar_csv_google(url, header=None)
+            normalizado = normalizar_hoja_cumplimientos(raw)
+
+            if normalizado is not None and not normalizado.empty:
+                print(
+                    f"[SSO] Cumplimientos SSO leído correctamente mediante {metodo}. "
+                    f"Registros: {len(normalizado)}"
+                )
+                st.session_state["error_cumplimientos_google"] = ""
+                return normalizado
+
+            errores.append(f"{metodo}: el CSV fue leído, pero no se reconoció la matriz.")
+
+        except Exception as error:
+            errores.append(f"{metodo}: {type(error).__name__}: {error}")
+            print(
+                f"[SSO] No fue posible leer Cumplimientos SSO mediante {metodo} "
+                f"desde {url}: {error}"
+            )
+
+    st.session_state["error_cumplimientos_google"] = " | ".join(errores[-3:])
+    return None
+
+
+def leer_cumplimientos_desde_excel(archivo_excel, nombres_hoja):
+    if not archivo_excel:
+        return None
+    try:
+        excel = pd.ExcelFile(archivo_excel)
+        hojas = {normalizar_texto(h): h for h in excel.sheet_names}
+        for nombre in nombres_hoja:
+            clave = normalizar_texto(nombre)
+            if clave in hojas:
+                raw = pd.read_excel(archivo_excel, sheet_name=hojas[clave], header=None)
+                normalizado = normalizar_hoja_cumplimientos(raw)
+                if normalizado is not None and not normalizado.empty:
+                    return normalizado
+    except Exception:
+        return None
+    return None
+
+
+def preparar_reportabilidad(df):
+    """Normaliza, limpia y valida los registros de la pestaña Reportabilidad."""
+    columnas = [
+        "Fecha",
+        "Área",
+        "Tipo_Evento",
+        "Descripcion",
+        "Accion_Inmediata",
+        "Responsable",
+        "Estado",
+        "Observacion",
+        "Ruta_Link",
+    ]
+
+    if df is None:
+        return pd.DataFrame(columns=columnas)
+
+    salida = normalizar_columnas_dataframe(df.copy())
+    salida = asegurar_columnas(salida, columnas)
+
+    # Elimina filas vacías que suelen quedar formateadas hacia abajo en Sheets.
+    claves_registro = [
+        "Fecha",
+        "Área",
+        "Tipo_Evento",
+        "Descripcion",
+        "Responsable",
+        "Estado",
+    ]
+    mascara = pd.Series(False, index=salida.index)
+    for columna in claves_registro:
+        valores = salida[columna]
+        mascara = mascara | (
+            valores.notna()
+            & valores.astype(str).str.strip().ne("")
+            & valores.astype(str).str.lower().ne("nan")
+        )
+
+    salida = salida.loc[mascara].copy()
+
+    if salida.empty:
+        return pd.DataFrame(columns=columnas)
+
+    salida["Fecha"] = salida["Fecha"].apply(convertir_fecha)
+
+    for columna in [
+        "Área",
+        "Tipo_Evento",
+        "Descripcion",
+        "Accion_Inmediata",
+        "Responsable",
+        "Estado",
+        "Observacion",
+        "Ruta_Link",
+    ]:
+        salida[columna] = salida[columna].fillna("").astype(str).str.strip()
+
+    salida = normalizar_estados(salida)
+    salida = preparar_periodo(salida)
+    return salida.reset_index(drop=True)
+
 def crear_datos_ejemplo(nombre_hoja):
+    if nombre_hoja == "Cumplimientos_SSO":
+        filas = []
+        # Respaldo completo del módulo: se consideran los 6 colaboradores
+        # definidos para el seguimiento SSO. Estos registros solo se utilizan
+        # cuando no es posible leer la hoja desde Google Sheets ni desde Excel.
+        ejemplo = {
+            "Juan Fonseca Cuevas": [
+                ("Control operacional CMPC", 2),
+                ("Control operacional SAIVAM", 4),
+                ("OPS de Seguridad CMPC", 8),
+                ("Inspecciones/Check List de Seguridad SAIVAM", 4),
+                ("Observaciones de Seguridad SAIVAM", 4),
+            ],
+            "José Acuña Ortiz": [
+                ("Control operacional CMPC", 2),
+                ("Control operacional SAIVAM", 4),
+                ("OPS de Seguridad CMPC", 8),
+                ("Inspecciones/Check List de Seguridad SAIVAM", 4),
+                ("Observaciones de Seguridad SAIVAM", 4),
+            ],
+            "Daniel Carrasco G.": [
+                ("Control operacional CMPC", 2),
+                ("Control operacional SAIVAM", 4),
+                ("OPS de Seguridad CMPC", 8),
+                ("Inspecciones/Check List de Seguridad SAIVAM", 4),
+                ("Observaciones de Seguridad SAIVAM", 4),
+            ],
+            "María Araya Parra": [
+                ("Control operacional CMPC", 2),
+                ("Control operacional SAIVAM", 4),
+                ("OPS de Seguridad CMPC", 8),
+                ("Inspecciones/Check List de Seguridad SAIVAM", 4),
+                ("Observaciones de Seguridad SAIVAM", 4),
+            ],
+            "Ricardo Grez": [
+                ("OPS de Seguridad CMPC", 8),
+            ],
+            "Esteban Cáceres": [
+                ("OPS BAPP", 4),
+            ],
+        }
+        for observador, actividades in ejemplo.items():
+            for actividad, meta in actividades:
+                fila = {"Observador": observador, "Actividad": actividad}
+                for mes in MESES_CORTOS:
+                    fila[mes] = meta
+                    fila[f"RE_{mes}"] = meta if mes in MESES_CORTOS[:7] else 0
+                filas.append(fila)
+        return pd.DataFrame(filas)
     if nombre_hoja == "OPS":
         return pd.DataFrame([
             {
@@ -723,24 +1436,24 @@ def crear_datos_ejemplo(nombre_hoja):
             {
                 "Fecha": "02/07/2026",
                 "Tema": "Bloqueo de energías",
-                "Tipo": "Charla operacional",
-                "Área": "Mantención",
-                "Relator": "Prevención",
-                "Asistentes": 12,
-                "Vencimiento": "02/07/2027",
-                "Estado": "Cerrada",
+                "Tipo": "Capacitación",
+                "Área": "Transversal",
+                "Responsable": "María Araya",
+                "Vencimiento": "31/07/2026",
+                "Estado": "Pendiente",
                 "Observacion": "Registro de ejemplo.",
+                "Evidencia": "",
             },
             {
-                "Fecha": "05/07/2026",
-                "Tema": "Uso correcto de EPP",
-                "Tipo": "Charla 5 minutos",
-                "Área": "Aserradero",
-                "Relator": "Supervisor",
-                "Asistentes": 8,
-                "Vencimiento": "05/07/2027",
-                "Estado": "Cerrada",
+                "Fecha": "04/08/2026",
+                "Tema": "Protocolo Psicosocial",
+                "Tipo": "Capacitación",
+                "Área": "Transversal",
+                "Responsable": "María Araya",
+                "Vencimiento": "31/08/2026",
+                "Estado": "En proceso",
                 "Observacion": "Registro de ejemplo.",
+                "Evidencia": "",
             },
         ])
 
@@ -904,32 +1617,28 @@ def crear_datos_ejemplo(nombre_hoja):
     if nombre_hoja == "Programa_Anual":
         return pd.DataFrame([
             {
-                "Fecha": "10/01/2026",
                 "Mes": "Enero",
-                "Actividad": "Difusión del programa anual de seguridad",
-                "Tipo_Actividad": "Gestión preventiva",
-                "Área": "Todas las áreas",
+                "Eje_Trabajo": "Capacitaciones",
+                "Actividad": "Capacitación Programa de Seguridad SAIVAM",
+                "Tipo_Actividad": "Capacitación",
+                "Fecha_Programada": "20/01/2026",
+                "Fecha_Realizacion": "20/01/2026",
                 "Responsable": "María Araya",
-                "Meta": 1,
-                "Resultado": 1,
-                "Cumplimiento": 100,
-                "Estado": "Cerrada",
-                "Evidencia": "Carpeta/Programa_Anual/Enero",
-                "Observacion": "Programa comunicado a supervisores y trabajadores.",
+                "Estado": "Realizada",
+                "Evidencia": "Carpeta/PRG_SSO_2026/Enero",
+                "Observacion": "Actividad ejecutada según programa.",
             },
             {
-                "Fecha": "18/07/2026",
-                "Mes": "Julio",
+                "Mes": "Agosto",
+                "Eje_Trabajo": "Procedimientos e instructivos",
                 "Actividad": "Revisión de procedimientos críticos",
                 "Tipo_Actividad": "Auditoría",
-                "Área": "Planta Térmica",
+                "Fecha_Programada": "18/08/2026",
+                "Fecha_Realizacion": "",
                 "Responsable": "María Araya",
-                "Meta": 1,
-                "Resultado": 0,
-                "Cumplimiento": 0,
                 "Estado": "Pendiente",
                 "Evidencia": "",
-                "Observacion": "Actividad programada para julio.",
+                "Observacion": "Actividad programada.",
             },
         ])
 
@@ -1134,7 +1843,60 @@ def cargar_datos():
     fuentes = {}
 
     for nombre_hoja, config in SHEETS.items():
-        df = leer_hoja_desde_google(config["nombres"])
+        if nombre_hoja == "Incidentes":
+            df = leer_hoja_desde_google(
+                config["nombres"],
+                config["columnas"],
+            )
+            fuente = "Google Sheets"
+
+            if df is None or df.empty:
+                df = leer_hoja_desde_excel(
+                    archivo_excel,
+                    config["nombres"],
+                )
+                fuente = "Excel local"
+
+            if df is None or df.empty:
+                # Reportabilidad no utiliza registros ficticios. De esta forma
+                # los indicadores nunca muestran información de ejemplo como si
+                # correspondiera a la operación real.
+                df = pd.DataFrame(columns=config["columnas"])
+                fuente = "Sin datos"
+
+            df = preparar_reportabilidad(df)
+            datos[nombre_hoja] = df
+            fuentes[nombre_hoja] = fuente
+            continue
+
+        if nombre_hoja == "Cumplimientos_SSO":
+            df = leer_cumplimientos_desde_google(config["nombres"])
+            fuente = "Google Sheets"
+
+            if df is None or df.empty:
+                df = leer_cumplimientos_desde_excel(
+                    archivo_excel,
+                    config["nombres"],
+                )
+                fuente = "Excel local"
+
+            if df is None or df.empty:
+                # No se usan datos ficticios en Cumplimientos SSO. Si Google
+                # Sheets y el Excel local no responden, el módulo queda vacío
+                # y muestra una advertencia, evitando porcentajes incorrectos.
+                df = pd.DataFrame(columns=config["columnas"])
+                fuente = "Sin datos"
+
+            df = normalizar_hoja_cumplimientos(df)
+            df = asegurar_columnas(df, config["columnas"])
+            datos[nombre_hoja] = df
+            fuentes[nombre_hoja] = fuente
+            continue
+
+        df = leer_hoja_desde_google(
+            config["nombres"],
+            config["columnas"],
+        )
         fuente = "Google Sheets"
 
         if df is None or df.empty:
@@ -1147,6 +1909,15 @@ def cargar_datos():
         if df is None or df.empty:
             df = crear_datos_ejemplo(nombre_hoja)
             fuente = "Datos de ejemplo"
+
+        # La pestaña PRG_SSO_2026 utiliza una estructura propia basada en
+        # Fecha Programada y Fecha Realización. Se procesa por separado para
+        # no reemplazar el campo Mes ni convertir "Realizada" en "Cerrada".
+        if nombre_hoja == "Programa_Anual":
+            df = preparar_programa_anual(df)
+            datos[nombre_hoja] = df
+            fuentes[nombre_hoja] = fuente
+            continue
 
         df = normalizar_columnas_dataframe(df)
         df = asegurar_columnas(df, config["columnas"])
@@ -1170,12 +1941,8 @@ def cargar_datos():
                 "Fecha_Compromiso",
             )
 
-        if nombre_hoja == "Capacitaciones":
-            df = marcar_vencimientos(
-                df,
-                "Vencimiento",
-            )
-
+        # En Capacitaciones el estado se conserva tal como fue informado en
+        # Google Sheets; no se recalcula automáticamente según Vencimiento.
         if nombre_hoja == "Certificaciones":
             df = preparar_certificaciones(df)
 
@@ -1262,6 +2029,8 @@ def tabla_limpia(
         "Fecha_Compromiso",
         "Vencimiento",
         "Proxima_Reposicion",
+        "Fecha_Programada",
+        "Fecha_Realizacion",
     ]:
         if columna in mostrar.columns:
             mostrar[columna] = mostrar[columna].apply(fecha_texto)
@@ -1280,6 +2049,9 @@ def tabla_limpia(
             "Accion_Correctiva": "Acción correctiva",
             "Proxima_Reposicion": "Próxima reposición",
             "Tipo_Actividad": "Tipo de actividad",
+            "Eje_Trabajo": "Eje de trabajo",
+            "Fecha_Programada": "Fecha programada",
+            "Fecha_Realizacion": "Fecha realización",
             "Tipo_Reconocimiento": "Tipo de reconocimiento",
             "Tipo_Reunion": "Tipo de reunión",
             "Tipo_Trabajo": "Tipo trabajo",
@@ -1326,6 +2098,8 @@ def tabla_limpia(
         "fecha",
         "vencimiento",
         "fecha_compromiso",
+        "fecha_programada",
+        "fecha_realizacion",
         "estado",
         "area",
         "mes",
@@ -1352,6 +2126,7 @@ def tabla_limpia(
         "tipo_observacion",
         "tipo_inspeccion",
         "tipo_actividad",
+        "eje_de_trabajo",
         "tipo_reunion",
         "tipo_trabajo",
         "tipo_documento",
@@ -1452,6 +2227,8 @@ def tabla_limpia(
         "fecha",
         "vencimiento",
         "fecha_compromiso",
+        "fecha_programada",
+        "fecha_realizacion",
         "estado",
         "meta",
         "resultado",
@@ -1816,8 +2593,8 @@ def buscar_foto_reconocimiento(*nombres_base):
 
 
 def obtener_fotos_reconocimientos():
-    # Solo se muestran estas cuatro fotografías, sin duplicados.
-    # Se incluyen variantes de escritura para asegurar la carga de claudioa.
+    # Fotografías visibles en la galería de reconocimientos, sin duplicados.
+    # Se aceptan variantes de escritura para facilitar la carga desde la carpeta.
     configuracion = [
         (
             ("claudioa", "clauidoa", "claudio", "claudia", "claudiaa"),
@@ -1838,6 +2615,26 @@ def obtener_fotos_reconocimientos():
         (
             ("saivam700", "saivam_700"),
             "Saivam700",
+        ),
+        (
+            ("tresreconocidos", "tres_reconocidos"),
+            "Tres reconocidos",
+        ),
+        (
+            ("1200d", "1200_d", "1200dias", "1200_dias"),
+            "1200 días sin accidentes",
+        ),
+        (
+            ("pedroa", "pedro_a", "pedro"),
+            "Pedro",
+        ),
+        (
+            ("hectora", "hector_a", "hector"),
+            "Héctor",
+        ),
+        (
+            ("estebana", "esteban_a", "esteban"),
+            "Esteban",
         ),
     ]
 
@@ -1867,8 +2664,7 @@ def mostrar_fotos_reconocimientos():
     if not fotos:
         st.info(
             "No se encontraron fotografías en `static/reconocimiento/`. "
-            "Verifica los archivos `claudioa`, `mariaa`, `ricardog` "
-            ", `saivam500` y `saivam700`."
+            "Verifica que los archivos configurados estén dentro de esa carpeta."
         )
         return
 
@@ -2301,6 +3097,41 @@ def obtener_sello_agua_html():
     )
 
 
+def obtener_sello_cumplimientos_html():
+    """Carga la imagen 'saivam' como sello de agua de Cumplimientos SSO."""
+    ruta = buscar_imagen_local("saivam")
+    imagen_uri = obtener_data_uri_recurso([ruta]) if ruta else ""
+    if not imagen_uri:
+        return ""
+    return (
+        '<div class="cumplimientos-watermark-layer" aria-hidden="true">'
+        f'<img class="cumplimientos-watermark-img" src="{imagen_uri}" alt="">'
+        '</div>'
+    )
+
+
+def obtener_sello_saivam_global_html():
+    """Carga la imagen 'saivam' completa como sello de agua para los módulos."""
+    ruta = buscar_imagen_local("saivam")
+    imagen_uri = obtener_data_uri_recurso([ruta]) if ruta else ""
+
+    if not imagen_uri:
+        return ""
+
+    return (
+        '<div class="saivam-page-watermark-layer" aria-hidden="true">'
+        f'<img class="saivam-page-watermark-img" src="{imagen_uri}" alt="">'
+        '</div>'
+    )
+
+
+def mostrar_sello_saivam_pagina():
+    """Inserta el sello SAIVAM sobre el fondo y de forma tenue sobre los paneles."""
+    sello = obtener_sello_saivam_global_html()
+    if sello:
+        st.markdown(sello, unsafe_allow_html=True)
+
+
 def aplicar_estilo():
     fondo_uri = obtener_data_uri_recurso([
         ruta_app("fondo_seguridad.jpg"),
@@ -2615,62 +3446,8 @@ section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked)
     box-shadow: 0 9px 21px rgba(16,185,129,.28), inset 0 0 18px rgba(255,255,255,.10) !important;
 }
 
-/*
-Oculta solamente el dibujo circular del radio.
-No se oculta el contenedor principal del label, porque ahí también
-se encuentra el texto del menú en algunas versiones de Streamlit.
-*/
-section[data-testid="stSidebar"] div[role="radiogroup"]
-label input[type="radio"] {
-    position: absolute !important;
-    opacity: 0 !important;
-    width: 0 !important;
-    height: 0 !important;
-    pointer-events: none !important;
-}
-
-section[data-testid="stSidebar"] div[role="radiogroup"]
-label input[type="radio"] + div,
-section[data-testid="stSidebar"] div[role="radiogroup"]
-label input[type="radio"] ~ div[aria-hidden="true"],
-section[data-testid="stSidebar"] div[role="radiogroup"]
-label > div:first-child > div:first-child:not([data-testid="stMarkdownContainer"]) {
+section[data-testid="stSidebar"] div[role="radiogroup"] label > div:first-child {
     display: none !important;
-    visibility: hidden !important;
-    width: 0 !important;
-    min-width: 0 !important;
-    max-width: 0 !important;
-    height: 0 !important;
-    min-height: 0 !important;
-    max-height: 0 !important;
-    margin: 0 !important;
-    padding: 0 !important;
-    border: 0 !important;
-    overflow: hidden !important;
-}
-
-/* Conserva siempre visibles el texto y los íconos del menú. */
-section[data-testid="stSidebar"] div[role="radiogroup"]
-label [data-testid="stMarkdownContainer"],
-section[data-testid="stSidebar"] div[role="radiogroup"]
-label [data-testid="stMarkdownContainer"] p {
-    display: block !important;
-    visibility: visible !important;
-    opacity: 1 !important;
-}
-
-section[data-testid="stSidebar"] div[role="radiogroup"] label {
-    column-gap: 0 !important;
-    gap: 0 !important;
-    padding-left: 12px !important;
-}
-
-section[data-testid="stSidebar"] div[role="radiogroup"]
-label [data-testid="stMarkdownContainer"] {
-    width: 100% !important;
-    flex: 1 1 100% !important;
-    margin-left: 0 !important;
-    padding-left: 0 !important;
 }
 
 section[data-testid="stSidebar"] div[role="radiogroup"] p {
@@ -2873,6 +3650,15 @@ section[data-testid="stSidebar"] [data-baseweb="select"] * {
     letter-spacing: -.35px;
 }
 
+.subsection-label {
+    color: #A7F3D0;
+    font-size: 14px;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: .7px;
+    margin: 10px 0 8px 2px;
+}
+
 div[data-testid="stVerticalBlockBorderWrapper"] {
     background: linear-gradient(145deg, rgba(2,8,6,.92), rgba(7,27,21,.84)) !important;
     border: 1px solid rgba(52,211,153,.30) !important;
@@ -2980,8 +3766,97 @@ div[data-testid="stDataFrame"] {
 
 .stAlert {
     border-radius: 16px !important;
-    background: rgba(3,12,9,.94) !important;
+    background: rgba(3,12,9,.58) !important;
     border: 1px solid rgba(52,211,153,.30) !important;
+}
+
+/*
+Transparencia uniforme para todos los módulos. Los paneles conservan contraste
+para la lectura, pero permiten ver el sello de agua como en KPI SSO.
+*/
+.kpi-card {
+    background: linear-gradient(
+        145deg,
+        rgba(3,10,8,.64),
+        rgba(8,31,24,.50)
+    ) !important;
+    box-shadow: 0 10px 25px rgba(0,0,0,.24), inset 0 1px 0 rgba(110,231,183,.10) !important;
+    backdrop-filter: blur(5px) !important;
+    -webkit-backdrop-filter: blur(5px) !important;
+}
+
+div[data-testid="stVerticalBlockBorderWrapper"] {
+    background: linear-gradient(
+        145deg,
+        rgba(2,8,6,.58),
+        rgba(7,27,21,.46)
+    ) !important;
+    box-shadow: 0 10px 25px rgba(0,0,0,.22), inset 0 1px 0 rgba(110,231,183,.08) !important;
+    backdrop-filter: blur(5px) !important;
+    -webkit-backdrop-filter: blur(5px) !important;
+}
+
+[data-testid="stPlotlyChart"] {
+    background: linear-gradient(
+        145deg,
+        rgba(2,8,6,.50),
+        rgba(7,27,21,.40)
+    ) !important;
+    box-shadow: 0 10px 25px rgba(0,0,0,.20), inset 0 1px 0 rgba(110,231,183,.07) !important;
+    backdrop-filter: blur(4px) !important;
+    -webkit-backdrop-filter: blur(4px) !important;
+}
+
+div[data-testid="stDataFrame"],
+.tabla-general-wrap,
+.cert-table-wrap {
+    background: rgba(1,7,5,.56) !important;
+    box-shadow: 0 8px 22px rgba(0,0,0,.20) !important;
+    backdrop-filter: blur(4px) !important;
+    -webkit-backdrop-filter: blur(4px) !important;
+}
+
+.tabla-general-compacta th,
+.cert-table th {
+    background: rgba(27,32,41,.68) !important;
+}
+
+.alert-card,
+.compromiso-card {
+    background: rgba(3,12,9,.58) !important;
+    box-shadow: 0 7px 18px rgba(0,0,0,.16) !important;
+    backdrop-filter: blur(4px) !important;
+    -webkit-backdrop-filter: blur(4px) !important;
+}
+
+.cert-equipment-card {
+    background:
+        radial-gradient(
+            circle at 100% 100%,
+            rgba(16,185,129,.08) 0,
+            rgba(16,185,129,.08) 24%,
+            transparent 25%
+        ),
+        rgba(4,24,18,.58) !important;
+    box-shadow: 0 10px 24px rgba(0,0,0,.18) !important;
+    backdrop-filter: blur(4px) !important;
+    -webkit-backdrop-filter: blur(4px) !important;
+}
+
+.cumplimiento-hero {
+    background: linear-gradient(
+        135deg,
+        rgba(15,23,42,.58),
+        rgba(6,78,59,.26)
+    ) !important;
+    backdrop-filter: blur(4px) !important;
+    -webkit-backdrop-filter: blur(4px) !important;
+}
+
+.persona-card {
+    background: rgba(15,23,42,.48) !important;
+    backdrop-filter: blur(4px) !important;
+    -webkit-backdrop-filter: blur(4px) !important;
 }
 
 /*
@@ -3017,6 +3892,101 @@ desde el borde del menú lateral hasta el extremo derecho de la pantalla.
     opacity: .16;
     filter: saturate(.72) contrast(1.02) brightness(.84);
     user-select: none;
+}
+
+/*
+Sello de agua SAIVAM para los módulos del menú lateral.
+La imagen se muestra completa, sin recortes, ocupando el área disponible
+entre el menú lateral y el borde derecho de la ventana.
+*/
+.saivam-page-watermark-layer {
+    position: fixed;
+    left: var(--sidebar-fixed-width);
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: calc(100vw - var(--sidebar-fixed-width));
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    pointer-events: none;
+    z-index: 8;
+    padding: 1.2rem 1.4rem;
+    box-sizing: border-box;
+}
+
+.saivam-page-watermark-img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    object-position: center center;
+    opacity: .15;
+    filter: saturate(.82) contrast(1.04) brightness(.88);
+    user-select: none;
+}
+
+@media (max-width: 900px) {
+    .saivam-page-watermark-layer {
+        left: var(--sidebar-fixed-width);
+        width: calc(100vw - var(--sidebar-fixed-width));
+        height: 100vh;
+        padding: .7rem;
+    }
+
+    .saivam-page-watermark-img {
+        object-fit: contain;
+        opacity: .12;
+    }
+}
+
+/* Sello de agua exclusivo del módulo Cumplimientos SSO. */
+.cumplimientos-watermark-layer {
+    position: fixed;
+    left: var(--sidebar-fixed-width);
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: calc(100vw - var(--sidebar-fixed-width));
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    pointer-events: none;
+    z-index: 0;
+}
+
+.cumplimientos-watermark-img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: none;
+    object-fit: cover;
+    object-position: center center;
+    opacity: .24;
+    filter: grayscale(.02) saturate(.95) contrast(1.12) brightness(.92);
+    transform: scale(1.08);
+    transform-origin: center center;
+    user-select: none;
+}
+
+@media (max-width: 900px) {
+    .cumplimientos-watermark-layer {
+        left: var(--sidebar-fixed-width);
+        width: calc(100vw - var(--sidebar-fixed-width));
+        height: 100vh;
+    }
+
+    .cumplimientos-watermark-img {
+        opacity: .19;
+        transform: scale(1.12);
+    }
 }
 
 .footer-app {
@@ -3479,17 +4449,20 @@ def kpi_card(icono, titulo, valor, subtitulo=""):
         "🔎": "azul",
         "📝": "morado",
         "📌": "ambar",
+        "📜": "celeste",
+        "🏆": "ambar",
+        "🏢": "verde",
         "🗂️": "celeste",
         "❌": "rojo",
     }
     tono = tonos.get(icono, "azul")
     st.markdown(
         f"""
-<div class="kpi-card">
-    <div class="kpi-icon {tono}">{icono}</div>
-    <div class="kpi-title">{escape_html(titulo)}</div>
-    <div class="kpi-value">{escape_html(valor)}</div>
-    <div class="kpi-sub">{escape_html(subtitulo)}</div>
+<div class="kpi-card notranslate" translate="no">
+    <div class="kpi-icon {tono}" translate="no">{icono}</div>
+    <div class="kpi-title notranslate" translate="no">{escape_html(titulo)}</div>
+    <div class="kpi-value notranslate" translate="no">{escape_html(valor)}</div>
+    <div class="kpi-sub notranslate" translate="no">{escape_html(subtitulo)}</div>
 </div>
         """,
         unsafe_allow_html=True,
@@ -3531,19 +4504,19 @@ PALETA_VERDE = ["#70D6A0", "#087B5B", "#35B779", "#A8E3C0", "#0B5D46", "#C9EED7"
 
 def aplicar_layout_fig(fig, height=360):
     fig.update_layout(
+        title=dict(text=""),
         height=height,
-        margin=dict(l=12, r=12, t=48, b=16),
+        margin=dict(l=12, r=12, t=24, b=16),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(255,255,255,0)",
         font=dict(color="#D1FAE5", size=12),
-        title_font=dict(size=20, color="#F4FFF9", family="Arial Black"),
         legend=dict(
             orientation="h",
             yanchor="bottom",
             y=-0.24,
             xanchor="center",
             x=0.5,
-            bgcolor="rgba(1,8,6,.68)",
+            bgcolor="rgba(1,8,6,.34)",
             font=dict(color="#D1FAE5"),
         ),
         hoverlabel=dict(bgcolor="#06100D", font_color="#F4FFF9", bordercolor="#34D399"),
@@ -3606,227 +4579,421 @@ def grafico_tendencia(df, titulo):
 # PÁGINAS
 # =========================================================
 
+def resumen_mensual_cumplimientos(df):
+    filas = []
+    for mes in MESES_CORTOS:
+        meta = pd.to_numeric(df.get(mes, 0), errors="coerce").fillna(0).sum()
+        real = pd.to_numeric(df.get(f"RE_{mes}", 0), errors="coerce").fillna(0).sum()
+        cumplimiento = (real / meta * 100) if meta > 0 else 0
+        filas.append({"Mes": mes, "Meta": meta, "Realizadas": real, "Cumplimiento": cumplimiento})
+    return pd.DataFrame(filas)
+
+
 def pagina_panel_general(datos, filtros):
     sello_agua = obtener_sello_agua_html()
     if sello_agua:
         st.markdown(sello_agua, unsafe_allow_html=True)
 
-    ops = aplicar_filtros(datos["OPS"], *filtros)
-    incidentes = aplicar_filtros(datos["Incidentes"], *filtros)
-    inspecciones = aplicar_filtros(datos["Inspecciones"], *filtros)
-    plan = aplicar_filtros(datos["Plan_Accion"], *filtros)
-    capacitaciones = aplicar_filtros(datos["Capacitaciones"], *filtros)
-    config = datos["Configuracion"]
+    cumplimiento_df = datos.get("Cumplimientos_SSO", pd.DataFrame()).copy()
+    incidentes = datos.get("Incidentes", pd.DataFrame()).copy()
+    capacitaciones = datos.get("Capacitaciones", pd.DataFrame()).copy()
+    config = datos.get("Configuracion", pd.DataFrame())
 
-    dias, fecha_inicio = dias_sin_accidentes(config, datos["Incidentes"])
+    dias, fecha_inicio = dias_sin_accidentes(config, incidentes)
+    resumen = resumen_mensual_cumplimientos(cumplimiento_df) if not cumplimiento_df.empty else pd.DataFrame()
+    resumen_corte = (
+        resumen[resumen["Mes"].isin(MESES_CUMPLIMIENTOS)].copy()
+        if not resumen.empty
+        else pd.DataFrame()
+    )
 
-    total_plan = len(plan)
-    cerradas = int(plan["Estado"].astype(str).str.contains("Cerrada", case=False, na=False).sum()) if not plan.empty else 0
-    vencidas = int(plan["Estado"].astype(str).str.contains("Vencida", case=False, na=False).sum()) if not plan.empty else 0
-    pendientes = int(plan["Estado"].astype(str).str.contains("Pendiente|En proceso|Vencida", case=False, regex=True, na=False).sum()) if not plan.empty else 0
-    cumplimiento = (cerradas / total_plan * 100) if total_plan else 0
+    # Todos los KPI de cumplimiento del panel general usan el mismo corte
+    # oficial que la página Cumplimientos SSO: enero a julio de 2026.
+    meta_corte = float(resumen_corte["Meta"].sum()) if not resumen_corte.empty else 0
+    real_corte = float(resumen_corte["Realizadas"].sum()) if not resumen_corte.empty else 0
+    porc_corte = (real_corte / meta_corte * 100) if meta_corte else 0
+    observadores = cumplimiento_df["Observador"].nunique() if not cumplimiento_df.empty else 0
 
-    accidentes_periodo = 0
+    accidentes = 0
     if not incidentes.empty and "Tipo_Evento" in incidentes.columns:
-        aux = incidentes.copy()
-        aux["_tipo"] = aux["Tipo_Evento"].apply(normalizar_texto)
-        accidentes_periodo = len(
-            aux[
-                aux["_tipo"].str.contains("accidente", na=False)
-                & ~aux["_tipo"].str.contains("cuasi", na=False)
-            ]
-        )
+        tipos = incidentes["Tipo_Evento"].apply(normalizar_texto)
+        accidentes = int((tipos.str.contains("accidente", na=False) & ~tipos.str.contains("cuasi", na=False)).sum())
 
-    # Primera fila equivalente a las cinco tarjetas del panel de equipos.
     c1, c2, c3, c4, c5 = st.columns(5, gap="medium")
     with c1:
         kpi_card("🛡️", "Días sin accidentes", numero(dias), f"Desde {fecha_texto(fecha_inicio)}")
     with c2:
-        kpi_card("👷", "Observaciones registradas", numero(len(ops)), "Observaciones del período")
+        kpi_card("👷", "Observadores", numero(observadores), "Personas con meta asignada")
     with c3:
-        kpi_card("✅", "Cumplimiento del plan", porcentaje(cumplimiento), f"{cerradas} cerradas de {total_plan}")
+        kpi_card("✅", "Actividades realizadas", numero(real_corte), f"Meta ene-jul: {numero(meta_corte)}")
     with c4:
-        kpi_card("⚠️", "Acciones pendientes", numero(pendientes), f"{vencidas} acciones vencidas")
+        kpi_card("📈", "% cumplimiento", f"{porc_corte:.0f}%", PERIODO_CUMPLIMIENTOS)
     with c5:
-        kpi_card("🚨", "Accidentes registrados", numero(accidentes_periodo), "Período seleccionado")
+        kpi_card("🚨", "Accidentes registrados", numero(accidentes), "Registros del año")
 
-    # Histórico preventivo + gráfico de distribución, siguiendo la estructura de la referencia.
-    col_hist, col_dist = st.columns([1.58, 0.92], gap="large")
-
-    with col_hist:
-        panel_titulo("Histórico de Gestión Preventiva")
-        historico = []
-
-        if not ops.empty:
-            ops_ultimas = ops.sort_values("Fecha", ascending=False).head(6)
-            for _, fila in ops_ultimas.iterrows():
-                detalle = (
-                    fila.get("Conducta_Riesgo", "")
-                    or fila.get("Conducta_Segura", "")
-                    or fila.get("Actividad", "")
-                )
-                historico.append({
-                    "Fecha": fila.get("Fecha", pd.NaT),
-                    "Registro": "Observación",
-                    "Área": fila.get("Área", ""),
-                    "Detalle": detalle,
-                    "Responsable": fila.get("Responsable", fila.get("Supervisor", "")),
-                    "Estado": fila.get("Estado", ""),
-                })
-
-        if not plan.empty:
-            plan_ultimas = plan.sort_values("Fecha", ascending=False).head(6)
-            for _, fila in plan_ultimas.iterrows():
-                historico.append({
-                    "Fecha": fila.get("Fecha", pd.NaT),
-                    "Registro": "Plan de acción",
-                    "Área": fila.get("Área", ""),
-                    "Detalle": fila.get("Accion_Correctiva", fila.get("Hallazgo", "")),
-                    "Responsable": fila.get("Responsable", ""),
-                    "Estado": fila.get("Estado", ""),
-                })
-
-        historico_df = pd.DataFrame(historico)
-        if not historico_df.empty:
-            historico_df = historico_df.sort_values("Fecha", ascending=False).head(9)
-            historico_df["Fecha"] = historico_df["Fecha"].apply(fecha_texto)
-            tabla_limpia(
-                historico_df,
-                ["Fecha", "Registro", "Área", "Detalle", "Responsable", "Estado"],
-                height=335,
-            )
+    col1, col2 = st.columns([1.15, 1], gap="large")
+    with col1:
+        panel_titulo("Meta versus resultado mensual")
+        if resumen.empty:
+            st.info("Sin datos en la hoja Cumplimientos SSO.")
         else:
-            st.info("Sin registros preventivos para mostrar.")
+            fig = go.Figure()
+            fig.add_bar(x=resumen_corte["Mes"], y=resumen_corte["Meta"], name="Meta")
+            fig.add_bar(x=resumen_corte["Mes"], y=resumen_corte["Realizadas"], name="Realizadas")
+            fig.update_layout(barmode="group", xaxis_title="Mes", yaxis_title="Cantidad")
+            st.plotly_chart(aplicar_layout_fig(fig, height=390), use_container_width=True)
 
-    with col_dist:
-        grafico_donut(plan, "Estado", "Distribución del Plan de Acción")
-
-    # Bloques inferiores: alertas, compromisos y evolución.
-    col_alertas, col_compromisos, col_evolucion = st.columns([0.95, 1.05, 1.25], gap="large")
-
-    with col_alertas:
-        panel_titulo("Alertas Preventivas")
-        alertas = []
-        if vencidas > 0:
-            alertas.append(("Acciones vencidas", f"{vencidas} acciones correctivas están fuera de plazo."))
-        if accidentes_periodo > 0:
-            alertas.append(("Accidentes registrados", f"Se registran {accidentes_periodo} accidentes en el período."))
-        if not inspecciones.empty and "Resultado" in inspecciones.columns:
-            no_cumple = int(inspecciones["Resultado"].astype(str).str.contains("No cumple", case=False, na=False).sum())
-            if no_cumple > 0:
-                alertas.append(("Inspecciones con hallazgos", f"{no_cumple} inspecciones presentan resultado No cumple."))
-        if not capacitaciones.empty and "Estado" in capacitaciones.columns:
-            cap_vencidas = int(capacitaciones["Estado"].astype(str).str.contains("Vencida", case=False, na=False).sum())
-            if cap_vencidas > 0:
-                alertas.append(("Capacitaciones vencidas", f"{cap_vencidas} registros requieren actualización."))
-
-        if not alertas:
-            st.markdown(
-                """
-<div class="alert-card ok">
-    <div class="alert-title">✅ Sin alertas críticas</div>
-    <div class="alert-sub">Los registros filtrados no presentan alertas de prioridad alta.</div>
-</div>
-                """,
-                unsafe_allow_html=True,
-            )
+    with col2:
+        panel_titulo("Cumplimiento mensual")
+        if resumen.empty:
+            st.info("Sin datos para graficar.")
         else:
-            for titulo, detalle in alertas[:4]:
-                st.markdown(
-                    f"""
-<div class="alert-card">
-    <div class="alert-title">⚠️ {escape_html(titulo)}</div>
-    <div class="alert-sub">{escape_html(detalle)}</div>
-</div>
-                    """,
-                    unsafe_allow_html=True,
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=resumen_corte["Mes"], y=resumen_corte["Cumplimiento"],
+                mode="lines+markers+text",
+                text=[f"{v:.0f}%" for v in resumen_corte["Cumplimiento"]],
+                textposition="top center", name="Cumplimiento",
+            ))
+            fig.add_hline(y=100, line_dash="dash", annotation_text="Meta 100%")
+            fig.update_yaxes(title="Cumplimiento (%)", rangemode="tozero")
+            st.plotly_chart(aplicar_layout_fig(fig, height=390), use_container_width=True)
+
+    panel_titulo("Resumen por observador")
+    if cumplimiento_df.empty:
+        st.info("Sin registros para mostrar.")
+    else:
+        filas = []
+        for observador, grupo in cumplimiento_df.groupby("Observador", dropna=False):
+            meta = sum(
+                pd.to_numeric(grupo[m], errors="coerce").fillna(0).sum()
+                for m in MESES_CUMPLIMIENTOS
+            )
+            real = sum(
+                pd.to_numeric(grupo[f"RE_{m}"], errors="coerce").fillna(0).sum()
+                for m in MESES_CUMPLIMIENTOS
+            )
+            filas.append({
+                "Observador": observador,
+                "Meta ene-jul": meta,
+                "Realizadas": real,
+                "Cumplimiento": f"{(real / meta * 100) if meta else 0:.0f}%",
+            })
+        tabla_limpia(
+            pd.DataFrame(filas),
+            ["Observador", "Meta ene-jul", "Realizadas", "Cumplimiento"],
+            centrar_todo=True,
+        )
+
+    # =============================================================
+    # INFORMACIÓN AGREGADA: CERTIFICACIONES Y RECONOCIMIENTOS
+    # =============================================================
+    certificaciones_df = datos.get("Certificaciones", pd.DataFrame()).copy()
+    reconocimientos_df = datos.get("Reconocimientos", pd.DataFrame()).copy()
+
+    if certificaciones_df is None:
+        certificaciones_df = pd.DataFrame()
+    if reconocimientos_df is None:
+        reconocimientos_df = pd.DataFrame()
+
+    # Conserva solamente registros reales de certificaciones.
+    if not certificaciones_df.empty:
+        columnas_clave_cert = [
+            columna
+            for columna in [
+                "Categoria",
+                "Subcategoria",
+                "Nombre_Certificacion",
+                "Vencimiento",
+            ]
+            if columna in certificaciones_df.columns
+        ]
+        if columnas_clave_cert:
+            mascara_cert = pd.Series(False, index=certificaciones_df.index)
+            for columna in columnas_clave_cert:
+                mascara_cert = mascara_cert | (
+                    certificaciones_df[columna]
+                    .fillna("")
+                    .astype(str)
+                    .str.strip()
+                    .ne("")
+                )
+            certificaciones_df = certificaciones_df.loc[mascara_cert].copy()
+
+    total_certificaciones = len(certificaciones_df)
+    vigentes_certificaciones = 0
+    por_vencer_certificaciones = 0
+    vencidas_certificaciones = 0
+
+    if not certificaciones_df.empty:
+        if "Estado" in certificaciones_df.columns:
+            estados_cert = certificaciones_df["Estado"].fillna("").apply(estado_base)
+        else:
+            estados_cert = pd.Series("Sin estado", index=certificaciones_df.index)
+
+        vigentes_certificaciones = int((estados_cert == "Vigente").sum())
+        por_vencer_certificaciones = int((estados_cert == "Por vencer").sum())
+        vencidas_certificaciones = int((estados_cert == "Vencida").sum())
+        certificaciones_df["Estado"] = estados_cert
+
+    cobertura_certificaciones = (
+        (vigentes_certificaciones + por_vencer_certificaciones)
+        / total_certificaciones
+        * 100
+        if total_certificaciones
+        else 0
+    )
+
+    proximo_dias = None
+    proximo_elemento = "Sin vencimientos registrados"
+    proximos_vencimientos = pd.DataFrame()
+
+    if not certificaciones_df.empty and "Vencimiento" in certificaciones_df.columns:
+        certificaciones_df["Vencimiento"] = certificaciones_df["Vencimiento"].apply(convertir_fecha)
+        certificaciones_df["Días restantes"] = certificaciones_df["Vencimiento"].apply(
+            lambda fecha: int((fecha.normalize() - HOY).days) if pd.notna(fecha) else pd.NA
+        )
+        proximos_vencimientos = certificaciones_df[
+            certificaciones_df["Días restantes"].notna()
+            & (certificaciones_df["Días restantes"] >= 0)
+        ].copy()
+        proximos_vencimientos = proximos_vencimientos.sort_values(
+            "Días restantes",
+            ascending=True,
+        )
+
+        if not proximos_vencimientos.empty:
+            primera_cert = proximos_vencimientos.iloc[0]
+            proximo_dias = int(primera_cert["Días restantes"])
+            proximo_elemento = str(
+                primera_cert.get("Subcategoria", "")
+                or primera_cert.get("Nombre_Certificacion", "")
+                or "Certificación"
+            ).strip()
+
+    # Reconocimientos del año 2026, alineados con el periodo del panel KPI.
+    if not reconocimientos_df.empty and "Fecha" in reconocimientos_df.columns:
+        reconocimientos_df["Fecha"] = reconocimientos_df["Fecha"].apply(convertir_fecha)
+        reconocimientos_2026 = reconocimientos_df[
+            reconocimientos_df["Fecha"].dt.year.eq(2026)
+        ].copy()
+    else:
+        reconocimientos_2026 = reconocimientos_df.copy()
+
+    # Elimina filas visualmente vacías de la hoja.
+    if not reconocimientos_2026.empty:
+        columnas_clave_rec = [
+            columna
+            for columna in ["Trabajador", "Motivo", "Periodo", "Estado"]
+            if columna in reconocimientos_2026.columns
+        ]
+        if columnas_clave_rec:
+            mascara_rec = pd.Series(False, index=reconocimientos_2026.index)
+            for columna in columnas_clave_rec:
+                mascara_rec = mascara_rec | (
+                    reconocimientos_2026[columna]
+                    .fillna("")
+                    .astype(str)
+                    .str.strip()
+                    .ne("")
+                )
+            reconocimientos_2026 = reconocimientos_2026.loc[mascara_rec].copy()
+
+    total_reconocimientos = len(reconocimientos_2026)
+    reconocimientos_entregados = 0
+    reconocimientos_corporativos = 0
+    personas_reconocidas = 0
+
+    if not reconocimientos_2026.empty:
+        if "Estado" in reconocimientos_2026.columns:
+            reconocimientos_entregados = int(
+                reconocimientos_2026["Estado"]
+                .fillna("")
+                .astype(str)
+                .str.contains("cerrada|entregada|realizada", case=False, regex=True, na=False)
+                .sum()
+            )
+
+        es_corporativo = pd.Series(False, index=reconocimientos_2026.index)
+        for columna in ["Trabajador", "Cargo", "Motivo", "Observacion"]:
+            if columna in reconocimientos_2026.columns:
+                texto_columna = reconocimientos_2026[columna].fillna("").apply(normalizar_texto)
+                es_corporativo = es_corporativo | texto_columna.str.contains(
+                    "empresa_saivam|reconocimiento_institucional|equipo_saivam",
+                    regex=True,
+                    na=False,
                 )
 
-    with col_compromisos:
-        panel_titulo("Próximos Compromisos")
-        proximos = plan.copy()
-        if not proximos.empty:
-            proximos["Fecha_Compromiso"] = proximos["Fecha_Compromiso"].apply(convertir_fecha)
-            cerrada_mask = proximos["Estado"].astype(str).str.contains("Cerrada|Cumplida|Realizada", case=False, regex=True, na=False)
-            proximos = proximos[~cerrada_mask & proximos["Fecha_Compromiso"].notna()]
-            proximos = proximos.sort_values("Fecha_Compromiso", ascending=True).head(4)
+        reconocimientos_corporativos = int(es_corporativo.sum())
 
-        if proximos.empty:
-            st.markdown(
-                """
-<div class="compromiso-card">
-    <div class="compromiso-title">Sin compromisos abiertos</div>
-    <div class="compromiso-sub">No existen acciones con fecha de compromiso pendiente.</div>
-</div>
-                """,
-                unsafe_allow_html=True,
+        if "Trabajador" in reconocimientos_2026.columns:
+            personas_reconocidas = int(
+                reconocimientos_2026.loc[~es_corporativo, "Trabajador"]
+                .replace("", pd.NA)
+                .dropna()
+                .nunique()
             )
+
+    panel_titulo("Certificaciones y reconocimientos")
+
+    st.markdown(
+        "<div class='subsection-label notranslate' translate='no'>Estado de certificaciones</div>",
+        unsafe_allow_html=True,
+    )
+    cc1, cc2, cc3, cc4 = st.columns(4, gap="medium")
+    with cc1:
+        kpi_card(
+            "📜",
+            "Certificaciones controladas",
+            numero(total_certificaciones),
+            f"{cobertura_certificaciones:.0f}% con vigencia",
+        )
+    with cc2:
+        kpi_card(
+            "✅",
+            "Certificaciones vigentes",
+            numero(vigentes_certificaciones),
+            "Vigencia superior a 30 días",
+        )
+    with cc3:
+        kpi_card(
+            "⚠️",
+            "Por vencer",
+            numero(por_vencer_certificaciones),
+            "Vencen dentro de 30 días",
+        )
+    with cc4:
+        valor_proximo = f"{proximo_dias} días" if proximo_dias is not None else "—"
+        kpi_card(
+            "📌",
+            "Próximo vencimiento",
+            valor_proximo,
+            proximo_elemento,
+        )
+
+    st.markdown(
+        "<div class='subsection-label notranslate' translate='no'>Reconocimientos 2026</div>",
+        unsafe_allow_html=True,
+    )
+    cr1, cr2, cr3, cr4 = st.columns(4, gap="medium")
+    with cr1:
+        kpi_card(
+            "🏆",
+            "Reconocimientos 2026",
+            numero(total_reconocimientos),
+            "Registros del año",
+        )
+    with cr2:
+        kpi_card(
+            "👷",
+            "Personas reconocidas",
+            numero(personas_reconocidas),
+            "Trabajadores destacados",
+        )
+    with cr3:
+        kpi_card(
+            "🏢",
+            "Reconocimientos corporativos",
+            numero(reconocimientos_corporativos),
+            "Reconocimientos a SAIVAM",
+        )
+    with cr4:
+        kpi_card(
+            "✅",
+            "Reconocimientos entregados",
+            numero(reconocimientos_entregados),
+            "Registros cerrados",
+        )
+
+    col_cert, col_rec = st.columns(2, gap="large")
+
+    with col_cert:
+        panel_titulo("Certificaciones por categoría")
+        if certificaciones_df.empty or "Categoria" not in certificaciones_df.columns:
+            st.info("Sin datos de certificaciones para graficar.")
         else:
-            for _, fila in proximos.iterrows():
-                fecha_comp = convertir_fecha(fila.get("Fecha_Compromiso"))
-                dias_restantes = int((fecha_comp.normalize() - HOY).days) if pd.notna(fecha_comp) else 0
-                if dias_restantes < 0:
-                    texto_badge = f"Vencida {abs(dias_restantes)} días"
-                    clase_badge = "vencida"
-                elif dias_restantes == 0:
-                    texto_badge = "Vence hoy"
-                    clase_badge = ""
-                else:
-                    texto_badge = f"Faltan {dias_restantes} días"
-                    clase_badge = ""
+            categorias_cert = (
+                certificaciones_df["Categoria"]
+                .fillna("Sin categoría")
+                .astype(str)
+                .replace("", "Sin categoría")
+                .value_counts()
+                .rename_axis("Categoría")
+                .reset_index(name="Cantidad")
+            )
+            fig_cert = px.bar(
+                categorias_cert.sort_values("Cantidad"),
+                x="Cantidad",
+                y="Categoría",
+                orientation="h",
+                text="Cantidad",
+            )
+            fig_cert.update_traces(textposition="outside", marker_color="#62C990")
+            st.plotly_chart(
+                aplicar_layout_fig(fig_cert, height=330),
+                use_container_width=True,
+            )
 
-                titulo = fila.get("Accion_Correctiva", fila.get("Hallazgo", "Compromiso preventivo"))
-                subtitulo = f"{fila.get('Área', 'Sin área')} · Responsable: {fila.get('Responsable', 'Sin asignar')} · {fecha_texto(fecha_comp)}"
-                st.markdown(
-                    f"""
-<div class="compromiso-card">
-    <div class="compromiso-head">
-        <div class="compromiso-title">{escape_html(titulo)}</div>
-        <span class="compromiso-badge {clase_badge}">{escape_html(texto_badge)}</span>
-    </div>
-    <div class="compromiso-sub">{escape_html(subtitulo)}</div>
-</div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-
-    with col_evolucion:
-        # Serie consolidada para emular la sección "Evolución" del panel de referencia.
-        series = []
-        for nombre, dataframe in [
-            ("Observaciones", ops),
-            ("Eventos", incidentes),
-            ("Inspecciones", inspecciones),
-        ]:
-            if dataframe is None or dataframe.empty or "Fecha" not in dataframe.columns:
-                continue
-            base = dataframe.copy()
-            base["Fecha"] = base["Fecha"].apply(convertir_fecha)
-            base = base[base["Fecha"].notna()]
-            if base.empty:
-                continue
-            base["Periodo_Mes"] = base["Fecha"].dt.to_period("M").dt.to_timestamp()
-            agrupado = base.groupby("Periodo_Mes", as_index=False).size().rename(columns={"size": "Cantidad"})
-            agrupado["Indicador"] = nombre
-            series.append(agrupado)
-
-        if series:
-            evolucion = pd.concat(series, ignore_index=True)
-            fig = px.line(
-                evolucion,
-                x="Periodo_Mes",
+    with col_rec:
+        panel_titulo("Reconocimientos por mes")
+        if reconocimientos_2026.empty or "Fecha" not in reconocimientos_2026.columns:
+            st.info("Sin datos de reconocimientos para graficar.")
+        else:
+            reconocimientos_2026["Mes_Numero_KPI"] = reconocimientos_2026["Fecha"].dt.month
+            resumen_rec_mensual = (
+                reconocimientos_2026
+                .groupby("Mes_Numero_KPI", as_index=False)
+                .size()
+                .rename(columns={"size": "Cantidad"})
+            )
+            resumen_rec_mensual["Mes"] = resumen_rec_mensual["Mes_Numero_KPI"].map(MESES)
+            resumen_rec_mensual = resumen_rec_mensual.sort_values("Mes_Numero_KPI")
+            fig_rec = px.bar(
+                resumen_rec_mensual,
+                x="Mes",
                 y="Cantidad",
-                color="Indicador",
-                markers=True,
-                title="Evolución de Indicadores",
-                color_discrete_sequence=PALETA_VERDE,
+                text="Cantidad",
             )
-            fig.update_xaxes(title="Mes")
-            fig.update_yaxes(title="Registros", rangemode="tozero")
-            st.plotly_chart(aplicar_layout_fig(fig, height=365), use_container_width=True)
+            fig_rec.update_traces(textposition="outside", marker_color="#62C990")
+            st.plotly_chart(
+                aplicar_layout_fig(fig_rec, height=330),
+                use_container_width=True,
+            )
+
+    col_vencimientos, col_ultimos = st.columns(2, gap="large")
+
+    with col_vencimientos:
+        panel_titulo("Próximos vencimientos")
+        if proximos_vencimientos.empty:
+            st.info("Sin vencimientos próximos registrados.")
         else:
-            panel_titulo("Evolución de Indicadores")
-            st.info("Sin fechas válidas para construir la evolución mensual.")
+            tabla_vencimientos = proximos_vencimientos.head(5).copy()
+            tabla_limpia(
+                tabla_vencimientos,
+                [
+                    "Categoria",
+                    "Subcategoria",
+                    "Vencimiento",
+                    "Días restantes",
+                    "Estado",
+                ],
+                centrar_todo=True,
+            )
+
+    with col_ultimos:
+        panel_titulo("Últimos reconocimientos")
+        if reconocimientos_2026.empty:
+            st.info("Sin reconocimientos registrados durante 2026.")
+        else:
+            ultimos_reconocimientos = reconocimientos_2026.sort_values(
+                "Fecha",
+                ascending=False,
+            ).head(5)
+            tabla_limpia(
+                ultimos_reconocimientos,
+                ["Fecha", "Trabajador", "Motivo", "Periodo", "Estado"],
+                centrar_todo=True,
+            )
 
 
 def pagina_reportabilidad(datos, filtros):
@@ -3836,13 +5003,24 @@ def pagina_reportabilidad(datos, filtros):
     Fecha, Área, Tipo_Evento, Descripcion, Accion_Inmediata,
     Responsable, Estado, Observacion y Ruta_Link.
     """
+    mostrar_sello_saivam_pagina()
+
+    # Usa .get() para que el módulo no se caiga si la pestaña todavía
+    # no está disponible o existe un problema temporal de conexión.
     df = aplicar_filtros(
-        datos["Incidentes"],
+        datos.get("Incidentes", pd.DataFrame()),
         *filtros,
     )
 
     if df is None:
         df = pd.DataFrame()
+
+    if df.empty:
+        st.warning(
+            "No se encontraron registros en la pestaña Reportabilidad. "
+            "Verifique que el Google Sheet esté compartido como lector "
+            "mediante enlace y que la pestaña contenga registros válidos."
+        )
 
     # Asegura compatibilidad aunque una columna todavía no exista
     # en la pestaña de Google Sheets.
@@ -4064,6 +5242,509 @@ def pagina_reportabilidad(datos, filtros):
             )
 
 
+
+def pagina_cumplimientos_sso(datos, filtros):
+    """Dashboard ejecutivo de cumplimiento de actividades SSO."""
+    mostrar_sello_saivam_pagina()
+
+    df = datos.get("Cumplimientos_SSO", pd.DataFrame()).copy()
+
+    if df is None or df.empty:
+        st.warning(
+            "No fue posible descargar la pestaña 'Cumplimientos SSO'. "
+            "El GID configurado es correcto, pero Google no está entregando el contenido CSV."
+        )
+        st.markdown(
+            """
+**Configuración necesaria en Google Sheets**  
+1. Presiona **Compartir**.  
+2. En **Acceso general**, selecciona **Cualquier persona con el enlace**.  
+3. Selecciona el permiso **Lector** y guarda.  
+4. Reinicia Streamlit o presiona **Actualizar Base de Datos**.
+
+El enlace puede abrir normalmente en Chrome porque tu cuenta de Google está
+iniciada, pero el proceso de Python no utiliza esa sesión.
+            """
+        )
+
+        detalle_error = st.session_state.get("error_cumplimientos_google", "")
+        if detalle_error:
+            with st.expander("Ver detalle técnico de la conexión"):
+                st.code(detalle_error, language="text")
+
+        st.info(
+            "Como respaldo, también puedes guardar el archivo "
+            "'Base_Datos_SGS_SAIVAM_Mulchen.xlsx' junto a app.py."
+        )
+        return
+
+    # ------------------------------------------------------------------
+    # Preparación y homologación de actividades
+    # ------------------------------------------------------------------
+    def homologar_actividad(nombre):
+        clave = normalizar_texto(nombre)
+        if "control_operacional" in clave and "cmpc" in clave:
+            return "Control operacional CMPC"
+        if "control_operacional" in clave and "saivam" in clave:
+            return "Control operacional SAIVAM"
+        if "ops" in clave and "bapp" in clave:
+            return "OPS BAPP"
+        if "ops" in clave and "cmpc" in clave:
+            return "OPS de Seguridad CMPC"
+        if "inspeccion" in clave or "check_list" in clave or "checklist" in clave:
+            return "Inspecciones / Check List SAIVAM"
+        if "observacion" in clave:
+            return "Observaciones de Seguridad SAIVAM"
+        return str(nombre).strip() or "Otra actividad"
+
+    orden_actividades = [
+        "Control operacional CMPC",
+        "Control operacional SAIVAM",
+        "OPS de Seguridad CMPC",
+        "OPS BAPP",
+        "Inspecciones / Check List SAIVAM",
+        "Observaciones de Seguridad SAIVAM",
+    ]
+
+    df["Actividad estándar"] = df["Actividad"].apply(homologar_actividad)
+    for columna in MESES_CORTOS + [f"RE_{mes}" for mes in MESES_CORTOS]:
+        if columna not in df.columns:
+            df[columna] = 0
+        df[columna] = df[columna].apply(_a_numero_cumplimiento)
+
+    df["Observador"] = df["Observador"].fillna("").astype(str).str.strip()
+    df = df[df["Observador"].ne("")].copy()
+
+    st.markdown(
+        """
+        <style>
+        .cumplimiento-hero {
+            padding: 22px 24px;
+            border: 1px solid rgba(52, 211, 153, .25);
+            border-radius: 18px;
+            background: linear-gradient(135deg, rgba(15,23,42,.98), rgba(6,78,59,.34));
+            margin-bottom: 14px;
+        }
+        .cumplimiento-hero h2 { margin: 0; color: #f8fafc; font-size: 28px; }
+        .cumplimiento-hero p { margin: 7px 0 0 0; color: #a7b0bf; font-size: 13px; }
+        .persona-card {
+            border: 1px solid rgba(148,163,184,.20);
+            border-radius: 15px;
+            padding: 14px 16px;
+            background: rgba(15,23,42,.68);
+            margin-bottom: 10px;
+        }
+        .persona-title { color:#f8fafc; font-weight:800; font-size:15px; margin-bottom:8px; }
+        .persona-meta { color:#94a3b8; font-size:12px; margin-top:7px; }
+        .progress-track { width:100%; height:10px; border-radius:99px; background:rgba(100,116,139,.28); overflow:hidden; }
+        .progress-fill { height:100%; border-radius:99px; }
+        .activity-pill {
+            display:inline-block; padding:5px 9px; border-radius:999px;
+            background:rgba(16,185,129,.12); border:1px solid rgba(52,211,153,.28);
+            color:#a7f3d0; font-size:11px; font-weight:700; margin:2px 3px 2px 0;
+        }
+        </style>
+        <div class="cumplimiento-hero">
+            <h2>🎯 Cumplimiento SSO 2026</h2>
+            <p>Seguimiento ejecutivo de actividades preventivas por colaborador, actividad y mes.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # ------------------------------------------------------------------
+    # Filtros
+    # ------------------------------------------------------------------
+    observadores = sorted(df["Observador"].unique().tolist())
+    actividades_disponibles = [
+        actividad for actividad in orden_actividades
+        if actividad in df["Actividad estándar"].unique()
+    ]
+    actividades_extra = sorted(
+        set(df["Actividad estándar"].unique()) - set(actividades_disponibles)
+    )
+    actividades_disponibles += actividades_extra
+
+    f1, f2, f3 = st.columns([1.1, 1.55, .75], gap="medium")
+    with f1:
+        seleccion_observador = st.selectbox(
+            "Colaborador",
+            ["Todos"] + observadores,
+            key="cumplimientos_observador_v3",
+        )
+    with f2:
+        seleccion_actividad = st.multiselect(
+            "Actividades",
+            actividades_disponibles,
+            default=actividades_disponibles,
+            key="cumplimientos_actividad_v3",
+        )
+    with f3:
+        seleccion_periodo = st.selectbox(
+            "Periodo considerado",
+            [PERIODO_CUMPLIMIENTOS, PERIODO_ANUAL_CUMPLIMIENTOS],
+            index=0,
+            key="cumplimientos_periodo_v5",
+        )
+
+    if seleccion_periodo == PERIODO_ANUAL_CUMPLIMIENTOS:
+        meses_periodo = list(MESES_CORTOS)
+        detalle_periodo = (
+            "Cálculo anual: total de actividades realizadas entre ENE y DIC "
+            "dividido por el total programado para todo 2026."
+        )
+    else:
+        meses_periodo = list(MESES_CUMPLIMIENTOS)
+        detalle_periodo = (
+            "Cálculo oficial: total de actividades realizadas entre ENE y JUL "
+            "dividido por el total programado del mismo periodo. "
+            "Los registros de AGO a DIC no afectan estos indicadores."
+        )
+
+    st.caption(detalle_periodo)
+
+    filtrado = df.copy()
+    if seleccion_observador != "Todos":
+        filtrado = filtrado[filtrado["Observador"] == seleccion_observador]
+    if seleccion_actividad:
+        filtrado = filtrado[filtrado["Actividad estándar"].isin(seleccion_actividad)]
+    else:
+        filtrado = filtrado.iloc[0:0]
+
+    if filtrado.empty:
+        st.info("No existen registros para los filtros seleccionados.")
+        return
+
+    # Periodo dinámico según la selección: enero-julio o año completo.
+    reales_periodo = [f"RE_{mes}" for mes in meses_periodo]
+
+    meta_total = float(filtrado[meses_periodo].sum().sum())
+    real_total = float(filtrado[reales_periodo].sum().sum())
+    pendientes = max(0.0, meta_total - real_total)
+    cumplimiento_total = (real_total / meta_total * 100) if meta_total else 0.0
+
+    def color_cumplimiento(valor):
+        if valor >= 100:
+            return "#22c55e"
+        if valor >= 90:
+            return "#10b981"
+        if valor >= 80:
+            return "#eab308"
+        if valor >= 70:
+            return "#f97316"
+        return "#ef4444"
+
+    # ------------------------------------------------------------------
+    # KPI ejecutivos
+    # ------------------------------------------------------------------
+    k1, k2, k3, k4 = st.columns(4, gap="medium")
+    with k1:
+        kpi_card("📈", "Cumplimiento", f"{cumplimiento_total:.0f}%", seleccion_periodo)
+    with k2:
+        kpi_card("✅", "Realizadas", numero(real_total), "Actividades ejecutadas")
+    with k3:
+        kpi_card("🎯", "Programadas", numero(meta_total), "Meta del periodo")
+    with k4:
+        kpi_card("⏳", "Pendientes", numero(pendientes), "Brecha respecto de la meta")
+
+    # ------------------------------------------------------------------
+    # Resúmenes consolidados
+    # ------------------------------------------------------------------
+    filas_persona = []
+    for observador, grupo in filtrado.groupby("Observador", dropna=False):
+        meta = float(grupo[meses_periodo].sum().sum())
+        real = float(grupo[reales_periodo].sum().sum())
+        filas_persona.append({
+            "Colaborador": observador,
+            "Meta": meta,
+            "Realizadas": real,
+            "Pendientes": max(0.0, meta - real),
+            "Cumplimiento": (real / meta * 100) if meta else 0.0,
+        })
+    por_persona = pd.DataFrame(filas_persona).sort_values(
+        ["Cumplimiento", "Realizadas"], ascending=[False, False]
+    )
+
+    filas_actividad = []
+    for actividad, grupo in filtrado.groupby("Actividad estándar", dropna=False):
+        meta = float(grupo[meses_periodo].sum().sum())
+        real = float(grupo[reales_periodo].sum().sum())
+        filas_actividad.append({
+            "Actividad": actividad,
+            "Meta": meta,
+            "Realizadas": real,
+            "Pendientes": max(0.0, meta - real),
+            "Cumplimiento": (real / meta * 100) if meta else 0.0,
+        })
+    por_actividad = pd.DataFrame(filas_actividad)
+    por_actividad["_orden"] = por_actividad["Actividad"].apply(
+        lambda x: orden_actividades.index(x) if x in orden_actividades else 99
+    )
+    por_actividad = por_actividad.sort_values(["_orden", "Actividad"]).drop(columns="_orden")
+
+    # ------------------------------------------------------------------
+    # Vista principal: ranking y actividad
+    # ------------------------------------------------------------------
+    izquierda, derecha = st.columns([1.05, 1.25], gap="large")
+
+    with izquierda:
+        panel_titulo("Ranking de cumplimiento por colaborador")
+        ranking = por_persona.sort_values("Cumplimiento", ascending=True)
+        colores = [color_cumplimiento(v) for v in ranking["Cumplimiento"]]
+        fig = go.Figure(go.Bar(
+            x=ranking["Cumplimiento"],
+            y=ranking["Colaborador"],
+            orientation="h",
+            text=[f"{v:.0f}%" for v in ranking["Cumplimiento"]],
+            textposition="outside",
+            marker_color=colores,
+            customdata=ranking[["Meta", "Realizadas", "Pendientes"]],
+            hovertemplate=(
+                "%{y}<br>Cumplimiento: %{x:.0f}%"
+                "<br>Meta: %{customdata[0]:.0f}"
+                "<br>Realizadas: %{customdata[1]:.0f}"
+                "<br>Pendientes: %{customdata[2]:.0f}<extra></extra>"
+            ),
+        ))
+        fig.add_vline(x=100, line_dash="dash", line_color="#94a3b8")
+        fig.update_layout(title=dict(text=""), showlegend=False)
+        fig.update_xaxes(title="Cumplimiento (%)", range=[0, max(110, ranking["Cumplimiento"].max() * 1.15)])
+        fig.update_yaxes(title="", automargin=True)
+        st.plotly_chart(
+            aplicar_layout_fig(fig, height=max(360, 120 + len(ranking) * 48)),
+            use_container_width=True,
+            config={"displaylogo": False},
+        )
+
+    with derecha:
+        panel_titulo("Cumplimiento por actividad")
+        actividad_graf = por_actividad.sort_values("Cumplimiento", ascending=True)
+        colores = [color_cumplimiento(v) for v in actividad_graf["Cumplimiento"]]
+        fig = go.Figure(go.Bar(
+            x=actividad_graf["Cumplimiento"],
+            y=actividad_graf["Actividad"],
+            orientation="h",
+            text=[f"{v:.0f}%" for v in actividad_graf["Cumplimiento"]],
+            textposition="outside",
+            marker_color=colores,
+            customdata=actividad_graf[["Meta", "Realizadas", "Pendientes"]],
+            hovertemplate=(
+                "%{y}<br>Cumplimiento: %{x:.0f}%"
+                "<br>Meta: %{customdata[0]:.0f}"
+                "<br>Realizadas: %{customdata[1]:.0f}"
+                "<br>Pendientes: %{customdata[2]:.0f}<extra></extra>"
+            ),
+        ))
+        fig.add_vline(x=100, line_dash="dash", line_color="#94a3b8")
+        fig.update_layout(title=dict(text=""), showlegend=False)
+        fig.update_xaxes(title="Cumplimiento (%)", range=[0, max(110, actividad_graf["Cumplimiento"].max() * 1.15)])
+        fig.update_yaxes(title="", automargin=True)
+        st.plotly_chart(
+            aplicar_layout_fig(fig, height=max(360, 120 + len(actividad_graf) * 48)),
+            use_container_width=True,
+            config={"displaylogo": False},
+        )
+
+    # ------------------------------------------------------------------
+    # Tendencia mensual y distribución
+    # ------------------------------------------------------------------
+    resumen_mes = []
+    for mes in MESES_CORTOS:
+        meta = float(filtrado[mes].sum())
+        real = float(filtrado[f"RE_{mes}"].sum())
+        resumen_mes.append({
+            "Mes": mes,
+            "Meta": meta,
+            "Realizadas": real,
+            "Cumplimiento": (real / meta * 100) if meta else 0.0,
+        })
+    resumen_mes = pd.DataFrame(resumen_mes)
+    resumen_visible = resumen_mes[resumen_mes["Mes"].isin(meses_periodo)].copy()
+
+    c1, c2 = st.columns([1.35, .85], gap="large")
+    with c1:
+        panel_titulo("Evolución mensual")
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=resumen_visible["Mes"], y=resumen_visible["Meta"],
+            name="Programadas", opacity=.45,
+            hovertemplate="%{x}<br>Programadas: %{y:.0f}<extra></extra>",
+        ))
+        fig.add_trace(go.Bar(
+            x=resumen_visible["Mes"], y=resumen_visible["Realizadas"],
+            name="Realizadas",
+            hovertemplate="%{x}<br>Realizadas: %{y:.0f}<extra></extra>",
+        ))
+        fig.add_trace(go.Scatter(
+            x=resumen_visible["Mes"], y=resumen_visible["Cumplimiento"],
+            name="Cumplimiento %", mode="lines+markers+text", yaxis="y2",
+            text=[f"{v:.0f}%" for v in resumen_visible["Cumplimiento"]],
+            textposition="top center",
+            hovertemplate="%{x}<br>Cumplimiento: %{y:.0f}%<extra></extra>",
+        ))
+        fig.update_layout(
+            barmode="group",
+            yaxis=dict(title="Cantidad"),
+            yaxis2=dict(title="Cumplimiento (%)", overlaying="y", side="right", rangemode="tozero"),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        )
+        st.plotly_chart(
+            aplicar_layout_fig(fig, height=410),
+            use_container_width=True,
+            config={"displaylogo": False},
+        )
+
+    with c2:
+        panel_titulo("Distribución de realizadas")
+        fig = go.Figure(go.Pie(
+            labels=por_actividad["Actividad"],
+            values=por_actividad["Realizadas"],
+            hole=.62,
+            textinfo="percent",
+            texttemplate="%{percent:.0%}",
+            hovertemplate="%{label}<br>Realizadas: %{value:.0f}<br>%{percent:.0%}<extra></extra>",
+        ))
+        fig.update_layout(showlegend=True, legend=dict(orientation="h", y=-.15))
+        st.plotly_chart(
+            aplicar_layout_fig(fig, height=410),
+            use_container_width=True,
+            config={"displaylogo": False},
+        )
+
+    # ------------------------------------------------------------------
+    # Tarjetas individuales
+    # ------------------------------------------------------------------
+    panel_titulo("Detalle por colaborador")
+    columnas_tarjetas = st.columns(2, gap="medium")
+    for indice, fila in por_persona.reset_index(drop=True).iterrows():
+        valor = float(fila["Cumplimiento"])
+        ancho = min(100.0, max(0.0, valor))
+        color = color_cumplimiento(valor)
+        with columnas_tarjetas[indice % 2]:
+            st.markdown(
+                f"""
+                <div class="persona-card">
+                    <div class="persona-title">👷 {escape_html(fila['Colaborador'])}</div>
+                    <div class="progress-track">
+                        <div class="progress-fill" style="width:{ancho:.1f}%; background:{color};"></div>
+                    </div>
+                    <div class="persona-meta">
+                        <b style="color:{color};">{valor:.0f}%</b> · Meta {fila['Meta']:.0f} ·
+                        Realizadas {fila['Realizadas']:.0f} · Pendientes {fila['Pendientes']:.0f}
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+    # ------------------------------------------------------------------
+    # Vistas de control
+    # ------------------------------------------------------------------
+    # Se utiliza un selector horizontal en lugar de st.tabs(). Esto evita el
+    # error del navegador "removeChild" que puede aparecer cuando Chrome
+    # Translate o alguna extensión modifica el DOM que Streamlit administra.
+    vista_control = st.radio(
+        "Vista de información",
+        [
+            "📋 Resumen por actividad",
+            "🗓️ Matriz mensual",
+            "🔥 Mapa de calor",
+        ],
+        horizontal=True,
+        label_visibility="collapsed",
+        key="vista_control_cumplimientos_sso",
+    )
+
+    if vista_control == "📋 Resumen por actividad":
+        resumen_tabla = por_actividad.copy()
+        resumen_tabla["Cumplimiento"] = resumen_tabla["Cumplimiento"].map(
+            lambda valor: f"{float(valor):.0f}%"
+        )
+        tabla_limpia(
+            resumen_tabla,
+            ["Actividad", "Meta", "Realizadas", "Pendientes", "Cumplimiento"],
+            centrar_todo=False,
+        )
+
+    elif vista_control == "🗓️ Matriz mensual":
+        detalle = filtrado[["Observador", "Actividad estándar"]].copy()
+        detalle = detalle.rename(columns={"Actividad estándar": "Actividad"})
+
+        for mes in meses_periodo:
+            metas_mes = pd.to_numeric(filtrado[mes], errors="coerce").fillna(0)
+            realizadas_mes = pd.to_numeric(
+                filtrado[f"RE_{mes}"], errors="coerce"
+            ).fillna(0)
+
+            detalle[mes] = [
+                f"{real:.0f}/{meta:.0f} ({(real / meta * 100 if meta else 0):.0f}%)"
+                for meta, real in zip(metas_mes, realizadas_mes)
+            ]
+
+        tabla_limpia(
+            detalle,
+            modo_ultracompacto=True,
+            centrar_todo=True,
+        )
+
+    else:
+        heat_rows = []
+        heat_labels = []
+
+        for _, fila in filtrado.iterrows():
+            valores = []
+
+            for mes in meses_periodo:
+                meta = _a_numero_cumplimiento(fila.get(mes, 0))
+                real = _a_numero_cumplimiento(fila.get(f"RE_{mes}", 0))
+                cumplimiento_mes = (real / meta * 100) if meta > 0 else 0.0
+                valores.append(cumplimiento_mes)
+
+            heat_rows.append(valores)
+            heat_labels.append(
+                f"{fila['Observador']} · {fila['Actividad estándar']}"
+            )
+
+        if heat_rows:
+            maximo_heatmap = max(max(fila) for fila in heat_rows)
+            fig_heatmap = go.Figure(
+                go.Heatmap(
+                    z=heat_rows,
+                    x=meses_periodo,
+                    y=heat_labels,
+                    zmin=0,
+                    zmax=max(120, maximo_heatmap),
+                    colorscale=[
+                        [0.00, "#7f1d1d"],
+                        [0.58, "#ef4444"],
+                        [0.70, "#f97316"],
+                        [0.80, "#eab308"],
+                        [0.90, "#10b981"],
+                        [1.00, "#22c55e"],
+                    ],
+                    colorbar=dict(title="Cumpl. %"),
+                    hovertemplate=(
+                        "%{y}<br>%{x}: %{z:.0f}%<extra></extra>"
+                    ),
+                )
+            )
+            fig_heatmap.update_layout(title=dict(text=""))
+            fig_heatmap.update_xaxes(title="Mes")
+            fig_heatmap.update_yaxes(title="", automargin=True)
+
+            alto_heatmap = max(
+                420,
+                min(880, 160 + len(heat_labels) * 31),
+            )
+
+            st.plotly_chart(
+                aplicar_layout_fig(fig_heatmap, height=alto_heatmap),
+                use_container_width=True,
+                config={"displaylogo": False},
+                key="heatmap_cumplimientos_sso",
+            )
+        else:
+            st.info("No existen datos para generar el mapa de calor.")
 
 def pagina_ops(datos, filtros):
     """
@@ -4711,20 +6392,32 @@ def pagina_plan_accion(datos, filtros):
 
 
 def pagina_capacitaciones(datos, filtros):
+    mostrar_sello_saivam_pagina()
+
+    # La vista utiliza la misma estructura y los mismos estados registrados en
+    # la pestaña "Capacitaciones" de Google Sheets.
     df = aplicar_filtros(datos["Capacitaciones"], *filtros)
-    total_asistentes = int(df["Asistentes"].apply(limpiar_numero).sum()) if not df.empty and "Asistentes" in df.columns else 0
-    vencidas = int(df["Estado"].astype(str).str.contains("Vencida", case=False, na=False).sum()) if not df.empty else 0
-    realizadas = int(df["Estado"].astype(str).str.contains("Cerrada|Realizada", case=False, regex=True, na=False).sum()) if not df.empty else 0
+
+    if df is not None and not df.empty:
+        df = df.sort_values("Fecha", ascending=True, na_position="last").copy()
+        estados = df["Estado"].apply(estado_base)
+        cerradas = int((estados == "Cerrada").sum())
+        pendientes = int((estados == "Pendiente").sum())
+        en_proceso = int((estados == "En proceso").sum())
+    else:
+        cerradas = 0
+        pendientes = 0
+        en_proceso = 0
 
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        kpi_card("🎓", "Actividades", numero(len(df)), "Charlas/capacitaciones")
+        kpi_card("🎓", "Capacitaciones", numero(len(df)), "Total programado")
     with c2:
-        kpi_card("👥", "Asistencias", numero(total_asistentes), "Total asistentes")
+        kpi_card("✅", "Cerradas", numero(cerradas), "Estado informado en Sheet")
     with c3:
-        kpi_card("✅", "Realizadas", numero(realizadas), "Registros cerrados")
+        kpi_card("🟠", "Pendientes", numero(pendientes), "Estado informado en Sheet")
     with c4:
-        kpi_card("⚠️", "Vencidas", numero(vencidas), "Revisar competencias")
+        kpi_card("🔵", "En proceso", numero(en_proceso), "Estado informado en Sheet")
 
     col_a, col_b = st.columns(2)
     with col_a:
@@ -4733,14 +6426,29 @@ def pagina_capacitaciones(datos, filtros):
         card_fin()
     with col_b:
         card_inicio()
-        grafico_donut(df, "Tipo", "Tipo de actividad")
+        grafico_donut(df, "Estado", "Estado de las capacitaciones")
         card_fin()
 
-    panel_titulo("Detalle de charlas y capacitaciones")
-    tabla_limpia(df, ["Fecha", "Tema", "Tipo", "Área", "Relator", "Asistentes", "Vencimiento", "Estado", "Observacion"])
+    panel_titulo("Detalle de capacitaciones")
+    tabla_limpia(
+        df,
+        [
+            "Fecha",
+            "Tema",
+            "Tipo",
+            "Área",
+            "Responsable",
+            "Vencimiento",
+            "Estado",
+            "Observacion",
+            "Evidencia",
+        ],
+    )
 
 
 def pagina_protocolos_minsal(datos, filtros):
+    mostrar_sello_saivam_pagina()
+
     df = aplicar_filtros(datos["Protocolos_MINSAL"], *filtros)
     total = len(df)
     expuestos = int(df["Expuestos"].apply(limpiar_numero).sum()) if not df.empty and "Expuestos" in df.columns else 0
@@ -4776,22 +6484,104 @@ def pagina_protocolos_minsal(datos, filtros):
 
 
 def pagina_programa_anual(datos, filtros):
-    df = aplicar_filtros(datos["Programa_Anual"], *filtros)
+    mostrar_sello_saivam_pagina()
+
+    df = datos.get("Programa_Anual", pd.DataFrame()).copy()
+    df = aplicar_filtros(df, *filtros)
+
+    if df is None or df.empty:
+        st.warning(
+            "No se encontraron registros en la pestaña PRG_SSO_2026. "
+            "Verifica que la hoja esté compartida como lector y que conserve "
+            "los encabezados definidos."
+        )
+        return
+
+    # Filtros propios del programa anual.
+    meses_presentes = {
+        str(valor).strip()
+        for valor in df.get("Mes", pd.Series(dtype=str)).dropna()
+        if str(valor).strip()
+    }
+    meses_ordenados = [mes for mes in MESES.values() if mes in meses_presentes]
+    meses_extra = sorted(meses_presentes.difference(meses_ordenados))
+
+    ejes = sorted(
+        valor
+        for valor in df.get("Eje_Trabajo", pd.Series(dtype=str)).dropna().astype(str).str.strip().unique()
+        if valor
+    )
+    estados = sorted(
+        valor
+        for valor in df.get("Estado", pd.Series(dtype=str)).dropna().astype(str).str.strip().unique()
+        if valor
+    )
+
+    f1, f2, f3 = st.columns(3)
+    with f1:
+        filtro_mes = st.selectbox(
+            "Mes",
+            ["Todos", *meses_ordenados, *meses_extra],
+            key="prg_sso_filtro_mes",
+        )
+    with f2:
+        filtro_eje = st.selectbox(
+            "Eje de trabajo",
+            ["Todos", *ejes],
+            key="prg_sso_filtro_eje",
+        )
+    with f3:
+        filtro_estado = st.selectbox(
+            "Estado",
+            ["Todos", *estados],
+            key="prg_sso_filtro_estado",
+        )
+
+    if filtro_mes != "Todos":
+        df = df[df["Mes"].astype(str).eq(filtro_mes)]
+    if filtro_eje != "Todos":
+        df = df[df["Eje_Trabajo"].astype(str).eq(filtro_eje)]
+    if filtro_estado != "Todos":
+        df = df[df["Estado"].astype(str).eq(filtro_estado)]
+
     total = len(df)
-    cerradas = int(df["Estado"].astype(str).str.contains("Cerrada", case=False, na=False).sum()) if not df.empty else 0
-    pendientes = int(df["Estado"].astype(str).str.contains("Pendiente|En proceso|Vencida", case=False, regex=True, na=False).sum()) if not df.empty else 0
-    cumplimiento = float(df["Cumplimiento"].apply(limpiar_numero).mean()) if not df.empty and "Cumplimiento" in df.columns else 0
-    tipos = df["Tipo_Actividad"].nunique() if not df.empty and "Tipo_Actividad" in df.columns else 0
+    estados_norm = df["Estado"].fillna("").apply(normalizar_texto)
+    realizadas = int(estados_norm.str.contains(r"realiz|cerr", regex=True, na=False).sum())
+    vencidas = int(estados_norm.str.contains(r"venc|atras", regex=True, na=False).sum())
+    en_proceso = int(estados_norm.str.contains(r"proceso|gestion", regex=True, na=False).sum())
+    pendientes = int(estados_norm.str.contains(r"pend|program", regex=True, na=False).sum())
+    cumplimiento = (realizadas / total * 100) if total else 0.0
+    tipos = df["Tipo_Actividad"].nunique() if "Tipo_Actividad" in df.columns else 0
 
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        kpi_card("🗓️", "Actividades programadas", numero(total), "Programa anual de seguridad")
+        kpi_card(
+            "🗓️",
+            "Actividades programadas",
+            numero(total),
+            f"{tipos} tipos de actividad",
+        )
     with c2:
-        kpi_card("✅", "Actividades ejecutadas", numero(cerradas), "Registros cerrados")
+        kpi_card(
+            "✅",
+            "Actividades realizadas",
+            numero(realizadas),
+            "Con fecha de realización",
+        )
     with c3:
-        kpi_card("⚠️", "Actividades pendientes", numero(pendientes), "Requieren seguimiento")
+        kpi_card(
+            "⚠️",
+            "Actividades vencidas",
+            numero(vencidas),
+            f"{pendientes} pendientes · {en_proceso} en proceso",
+        )
     with c4:
-        kpi_card("📊", "Cumplimiento promedio", porcentaje(cumplimiento), f"{tipos} tipos de actividad")
+        kpi_card(
+            "📊",
+            "Cumplimiento global",
+            porcentaje(cumplimiento),
+            "Realizadas / programadas",
+        )
 
     col_a, col_b = st.columns(2)
     with col_a:
@@ -4800,20 +6590,35 @@ def pagina_programa_anual(datos, filtros):
         card_fin()
     with col_b:
         card_inicio()
-        grafico_barra(df, "Tipo_Actividad", "Actividades por tipo", orientacion="h")
+        grafico_barra(
+            df,
+            "Eje_Trabajo",
+            "Actividades por eje de trabajo",
+            orientacion="h",
+        )
         card_fin()
 
     panel_titulo("Detalle del Programa Anual de Seguridad")
     tabla_limpia(
         df,
-        ["Fecha", "Mes", "Actividad", "Tipo_Actividad", "Área", "Responsable", "Meta", "Resultado", "Cumplimiento", "Estado", "Evidencia", "Observacion"],
+        [
+            "Mes",
+            "Eje_Trabajo",
+            "Actividad",
+            "Tipo_Actividad",
+            "Fecha_Programada",
+            "Fecha_Realizacion",
+            "Responsable",
+            "Estado",
+            "Evidencia",
+            "Observacion",
+        ],
+        height=520,
     )
 
 
 def pagina_reconocimientos(datos, filtros):
-    sello_reconocimientos = obtener_sello_reconocimientos_html()
-    if sello_reconocimientos:
-        st.markdown(sello_reconocimientos, unsafe_allow_html=True)
+    mostrar_sello_saivam_pagina()
 
     df = aplicar_filtros(datos["Reconocimientos"], *filtros)
 
@@ -4915,6 +6720,8 @@ def pagina_reconocimientos(datos, filtros):
 
 
 def pagina_comite_paritario(datos, filtros):
+    mostrar_sello_saivam_pagina()
+
     df = aplicar_filtros(datos["Comite_Paritario"], *filtros)
     total = len(df)
     cerradas = int(df["Estado"].astype(str).str.contains("Cerrada", case=False, na=False).sum()) if not df.empty else 0
@@ -5016,13 +6823,7 @@ def pagina_documentos(datos, filtros):
 
 
 def pagina_certificaciones(datos, filtros):
-    sello_certificaciones = obtener_sello_certificaciones_html()
-
-    if sello_certificaciones:
-        st.markdown(
-            sello_certificaciones,
-            unsafe_allow_html=True,
-        )
+    mostrar_sello_saivam_pagina()
 
     df = aplicar_filtros(datos["Certificaciones"], *filtros)
 
@@ -5341,9 +7142,7 @@ menu = st.sidebar.radio(
         "🛡️ KPI SSO",
         "🗓️ PRG SSO 2026",
         "⚠️ Reportabilidad",
-        "👀 Observaciones SSO y BAPP",
-        "📋 Inspecciones de Seguridad",
-        "✅ Control Operacional",
+        "🎯 Cumplimientos SSO",
         "🎓 Capacitaciones",
         "🏆 Reconocimientos",
         "👥 Comité Paritario",
@@ -5377,7 +7176,7 @@ st.markdown(
 <div class="app-topbar">
     <div>
         <div class="title-main">Seguimiento y Control de Seguridad y Salud Ocupacional</div>
-        <div class="subtitle-main">Sistema de Gestión SSO SAIVAM Mulchén · Programa anual, reportabilidad, observaciones preventivas y seguimiento de la gestión.</div>
+        <div class="subtitle-main">Sistema de Gestión SSO SAIVAM Mulchén · Programa anual, reportabilidad, cumplimientos preventivos y seguimiento de la gestión.</div>
     </div>
     <div class="main-logo-card">{logo_principal}</div>
 </div>
@@ -5391,12 +7190,8 @@ elif menu == "🗓️ PRG SSO 2026":
     pagina_programa_anual(datos, filtros)
 elif menu == "⚠️ Reportabilidad":
     pagina_reportabilidad(datos, filtros)
-elif menu == "👀 Observaciones SSO y BAPP":
-    pagina_ops(datos, filtros)
-elif menu == "📋 Inspecciones de Seguridad":
-    pagina_inspecciones(datos, filtros)
-elif menu == "✅ Control Operacional":
-    pagina_plan_accion(datos, filtros)
+elif menu == "🎯 Cumplimientos SSO":
+    pagina_cumplimientos_sso(datos, filtros)
 elif menu == "🎓 Capacitaciones":
     pagina_capacitaciones(datos, filtros)
 elif menu == "🏆 Reconocimientos":
