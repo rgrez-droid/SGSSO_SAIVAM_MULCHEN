@@ -4418,6 +4418,7 @@ def kpi_card(icono, titulo, valor, subtitulo=""):
         "⚠️": "ambar",
         "🚨": "rojo",
         "📋": "azul",
+        "📈": "verde",
         "🎓": "morado",
         "🦺": "ambar",
         "🔒": "celeste",
@@ -6522,6 +6523,12 @@ def pagina_programa_anual(datos, filtros):
         df = df[df["Mes"].astype(str).eq(filtro_mes)]
     if filtro_eje != "Todos":
         df = df[df["Eje_Trabajo"].astype(str).eq(filtro_eje)]
+
+    # El avance a la fecha se calcula antes de aplicar el filtro Estado.
+    # Así el indicador conserva una base completa y no se transforma en 100 %
+    # cuando el usuario selecciona únicamente las actividades cerradas.
+    df_avance = df.copy()
+
     if filtro_estado != "Todos":
         df = df[df["Estado"].astype(str).eq(filtro_estado)]
 
@@ -6533,7 +6540,40 @@ def pagina_programa_anual(datos, filtros):
     cumplimiento = (cerradas / total * 100) if total else 0.0
     tipos = df["Tipo_Actividad"].nunique() if "Tipo_Actividad" in df.columns else 0
 
-    c1, c2, c3, c4 = st.columns(4)
+    # Fecha dinámica de Chile continental. Se recalcula en cada ejecución de
+    # la página, por lo que el corte avanza automáticamente con el calendario.
+    try:
+        hoy_programa = (
+            pd.Timestamp.now(tz="America/Santiago")
+            .tz_localize(None)
+            .normalize()
+        )
+    except Exception:
+        hoy_programa = pd.Timestamp.today().normalize()
+
+    fechas_programadas = pd.to_datetime(
+        df_avance.get("Fecha_Programada", pd.Series(index=df_avance.index, dtype="datetime64[ns]")),
+        errors="coerce",
+    )
+    actividades_hasta_hoy = fechas_programadas.notna() & (
+        fechas_programadas.dt.normalize() <= hoy_programa
+    )
+    programadas_a_fecha = int(actividades_hasta_hoy.sum())
+
+    estados_a_fecha = (
+        df_avance.loc[actividades_hasta_hoy, "Estado"]
+        .fillna("")
+        .apply(normalizar_texto)
+    )
+    cerradas_a_fecha = int(estados_a_fecha.eq("cerrada").sum())
+    avance_a_fecha = (
+        cerradas_a_fecha / programadas_a_fecha * 100
+        if programadas_a_fecha
+        else 0.0
+    )
+    fecha_corte = fecha_texto(hoy_programa)
+
+    c1, c2, c3, c4, c5 = st.columns(5)
     with c1:
         kpi_card(
             "🗓️",
@@ -6546,7 +6586,7 @@ def pagina_programa_anual(datos, filtros):
             "✅",
             "Actividades cerradas",
             numero(cerradas),
-            f"{porcentaje(cumplimiento)} de cumplimiento",
+            f"{porcentaje(cumplimiento)} del total filtrado",
         )
     with c3:
         kpi_card(
@@ -6561,6 +6601,16 @@ def pagina_programa_anual(datos, filtros):
             "Actividades en proceso",
             numero(en_proceso),
             "Estado informado en Sheet",
+        )
+    with c5:
+        kpi_card(
+            "📈",
+            "Avance a la fecha",
+            porcentaje(avance_a_fecha),
+            (
+                f"{cerradas_a_fecha} de {programadas_a_fecha} cerradas "
+                f"al {fecha_corte}"
+            ),
         )
 
     col_a, col_b = st.columns(2)
