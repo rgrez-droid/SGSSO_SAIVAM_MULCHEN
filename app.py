@@ -3500,12 +3500,13 @@ section[data-testid="stSidebar"] [data-baseweb="select"] * {
 }
 
 .title-main {
-    font-size: clamp(30px, 2.35vw, 43px);
+    font-size: clamp(20px, 1.7vw, 32px);
     font-weight: 1000;
     color: #D1FAE5;
     margin: 1px 0 2px 0;
     line-height: 1.04;
-    letter-spacing: -1.5px;
+    letter-spacing: -1.2px;
+    white-space: nowrap;
     text-shadow: 0 2px 10px rgba(0,0,0,.78);
 }
 
