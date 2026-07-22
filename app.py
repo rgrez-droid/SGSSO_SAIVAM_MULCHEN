@@ -48,8 +48,8 @@ st.markdown(
 AUTOR = "Ricardo Grez"
 EMPRESA = "SAIVAM"
 CONTRATO = "CMPC Mulchén"
-VERSION = "1.4.13"
-REVISION_CODIGO = "21-07-2026-R40-GALERIA-AUTOMATICA"
+VERSION = "1.4.14"
+REVISION_CODIGO = "21-07-2026-R41-REPORTABILIDAD-EVIDENCIA"
 
 print(
     f"[SSO] Ejecutando archivo corregido: {os.path.abspath(__file__)} "
@@ -133,8 +133,7 @@ SHEETS = {
             "Accion_Inmediata",
             "Responsable",
             "Estado",
-            "Observacion",
-            "Ruta_Link",
+            "Evidencia",
         ],
     },
     "Cumplimientos_SSO": {
@@ -1198,15 +1197,21 @@ def preparar_reportabilidad(df):
         "Accion_Inmediata",
         "Responsable",
         "Estado",
-        "Observacion",
-        "Ruta_Link",
+        "Evidencia",
     ]
 
     if df is None:
         return pd.DataFrame(columns=columnas)
 
     salida = normalizar_columnas_dataframe(df.copy())
-    salida = asegurar_columnas(salida, columnas)
+
+    # Compatibilidad con versiones anteriores de la hoja, donde la última
+    # columna se llamaba Ruta_Link. Su contenido ahora se presenta como Evidencia.
+    if "Evidencia" not in salida.columns and "Ruta_Link" in salida.columns:
+        salida["Evidencia"] = salida["Ruta_Link"]
+
+    # Conserva exclusivamente la estructura vigente de Reportabilidad.
+    salida = asegurar_columnas(salida, columnas)[columnas]
 
     # Elimina filas vacías que suelen quedar formateadas hacia abajo en Sheets.
     claves_registro = [
@@ -1240,8 +1245,7 @@ def preparar_reportabilidad(df):
         "Accion_Inmediata",
         "Responsable",
         "Estado",
-        "Observacion",
-        "Ruta_Link",
+        "Evidencia",
     ]:
         salida[columna] = salida[columna].fillna("").astype(str).str.strip()
 
@@ -1344,7 +1348,7 @@ def crear_datos_ejemplo(nombre_hoja):
                 "Accion_Inmediata": "Se informa a supervisor y se controla el área.",
                 "Responsable": "Supervisor",
                 "Estado": "En proceso",
-                "Observacion": "Registro de ejemplo.",
+                "Evidencia": "Registro de ejemplo.",
             },
             {
                 "Fecha": "06/07/2026",
@@ -1355,7 +1359,7 @@ def crear_datos_ejemplo(nombre_hoja):
                 "Accion_Inmediata": "Detención de tarea y charla de refuerzo.",
                 "Responsable": "Prevención",
                 "Estado": "Pendiente",
-                "Observacion": "Registro de ejemplo.",
+                "Evidencia": "Registro de ejemplo.",
             },
         ])
 
@@ -4980,7 +4984,7 @@ def pagina_reportabilidad(datos, filtros):
     Panel de Reportabilidad basado en las columnas:
 
     Fecha, Área, Tipo_Evento, Descripcion, Accion_Inmediata,
-    Responsable, Estado, Observacion y Ruta_Link.
+    Responsable, Estado y Evidencia.
     """
     mostrar_sello_saivam_pagina()
 
@@ -5011,8 +5015,7 @@ def pagina_reportabilidad(datos, filtros):
         "Accion_Inmediata",
         "Responsable",
         "Estado",
-        "Observacion",
-        "Ruta_Link",
+        "Evidencia",
     ]
 
     for columna in columnas_requeridas:
@@ -5146,8 +5149,7 @@ def pagina_reportabilidad(datos, filtros):
             "Accion_Inmediata",
             "Responsable",
             "Estado",
-            "Observacion",
-            "Ruta_Link",
+            "Evidencia",
         ],
         height=430,
     )
@@ -5187,10 +5189,6 @@ def pagina_reportabilidad(datos, filtros):
                 fila.get("Estado", "Pendiente")
             ).strip() or "Pendiente"
 
-            observacion = str(
-                fila.get("Observacion", "")
-            ).strip()
-
             fecha = fecha_texto(
                 fila.get("Fecha", pd.NaT)
             )
@@ -5201,9 +5199,6 @@ def pagina_reportabilidad(datos, filtros):
 
             if fecha:
                 detalle_secundario += f" · {fecha}"
-
-            if observacion:
-                detalle_secundario += f" · {observacion}"
 
             st.markdown(
                 f"""
