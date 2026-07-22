@@ -49,7 +49,7 @@ AUTOR = "Ricardo Grez"
 EMPRESA = "SAIVAM"
 CONTRATO = "CMPC Mulchén"
 VERSION = "1.4.13"
-REVISION_CODIGO = "21-07-2026-R38-PRG-ESTADOS-DESDE-SHEET"
+REVISION_CODIGO = "21-07-2026-R40-GALERIA-AUTOMATICA"
 
 print(
     f"[SSO] Ejecutando archivo corregido: {os.path.abspath(__file__)} "
@@ -2575,53 +2575,32 @@ def buscar_foto_reconocimiento(*nombres_base):
 
 def obtener_fotos_reconocimientos():
     # Fotografías visibles en la galería de reconocimientos, sin duplicados.
-    # Se aceptan variantes de escritura para facilitar la carga desde la carpeta.
+    # Las imágenes configuradas aparecen primero en el orden indicado.
+    # Cualquier fotografía adicional que se cargue en la carpeta también se
+    # incorpora automáticamente, sin necesidad de modificar nuevamente el código.
     configuracion = [
-        (
-            ("claudioa", "clauidoa", "claudio", "claudia", "claudiaa"),
-            "Claudioa",
-        ),
-        (
-            ("mariaa", "maria", "maria_araya"),
-            "Mariaa",
-        ),
-        (
-            ("ricardog", "ricardo_g", "ricardo"),
-            "Ricardog",
-        ),
-        (
-            ("saivam500", "saivam_500"),
-            "Saivam500",
-        ),
-        (
-            ("saivam700", "saivam_700"),
-            "Saivam700",
-        ),
-        (
-            ("tresreconocidos", "tres_reconocidos"),
-            "Tres reconocidos",
-        ),
-        (
-            ("1200d", "1200_d", "1200dias", "1200_dias"),
-            "1200 días sin accidentes",
-        ),
-        (
-            ("pedroa", "pedro_a", "pedro"),
-            "Pedro",
-        ),
-        (
-            ("hectora", "hector_a", "hector"),
-            "Héctor",
-        ),
-        (
-            ("estebana", "esteban_a", "esteban"),
-            "Esteban",
-        ),
+        (("elj",), "ELJ"),
+        (("mariaa", "maria", "maria_araya"), "María"),
+        (("saivam500", "saivam_500"), "SAIVAM 500"),
+        (("ricardog", "ricardo_g", "ricardo"), "Ricardo"),
+        (("saivam700", "saivam_700"), "SAIVAM 700"),
+        (("estebana", "esteban_a", "esteban"), "Esteban"),
+        (("hectora", "hector_a", "hector"), "Héctor"),
+        (("pedroa", "pedro_a", "pedro"), "Pedro"),
+        (("1200d", "1200_d", "1200dias", "1200_dias"), "1.200 días sin accidentes"),
+        (("tresreconocidos", "tres_reconocidos"), "Tres reconocidos"),
+        (("claudioa", "clauidoa", "claudio", "claudia", "claudiaa"), "Claudio"),
+        (("grupojose", "grupo_jose"), "Grupo José"),
+        (("isaac",), "Isaac"),
+        (("pedrom", "pedro_m"), "Pedro M."),
+        (("grupojuan", "grupo_juan"), "Grupo Juan"),
+        (("manuel",), "Manuel"),
     ]
 
     fotos = []
     rutas_usadas = set()
 
+    # Primero agrega las fotografías configuradas en el orden definido.
     for nombres_posibles, titulo in configuracion:
         ruta = buscar_foto_reconocimiento(*nombres_posibles)
 
@@ -2632,6 +2611,23 @@ def obtener_fotos_reconocimientos():
                 "archivo": os.path.basename(ruta),
             })
             rutas_usadas.add(ruta)
+
+    # Después incorpora automáticamente cualquier imagen nueva que todavía no
+    # esté configurada. Así, basta con subirla a static/reconocimiento o
+    # static/reconocimientos para que aparezca en la galería.
+    for ruta in listar_fotos_reconocimientos():
+        if ruta in rutas_usadas:
+            continue
+
+        nombre_base = os.path.splitext(os.path.basename(ruta))[0]
+        titulo_automatico = re.sub(r"[_-]+", " ", nombre_base).strip().title()
+
+        fotos.append({
+            "ruta": ruta,
+            "titulo": titulo_automatico or "Reconocimiento",
+            "archivo": os.path.basename(ruta),
+        })
+        rutas_usadas.add(ruta)
 
     return fotos
 
