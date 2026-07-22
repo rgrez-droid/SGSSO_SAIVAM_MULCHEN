@@ -7205,7 +7205,7 @@ st.markdown(
     f"""
 <div class="app-topbar">
     <div>
-        <div class="title-main">Seguimiento y Control de Seguridad y Salud Ocupacional</div>
+        <div class="title-main">SEGUIMIENTO, CONTROL DE SEGURIDAD Y SALUD OCUPACIONAL.</div>
         <div class="subtitle-main">Sistema de Gestión SSO SAIVAM Mulchén · Programa anual, reportabilidad, cumplimientos preventivos y seguimiento de la gestión.</div>
     </div>
     <div class="main-logo-card">{logo_principal}</div>
