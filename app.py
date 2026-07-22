@@ -1990,6 +1990,7 @@ def tabla_limpia(
     height=460,
     centrar_todo=False,
     modo_ultracompacto=False,
+    alinear_arriba_columnas=None,
 ):
     """
     Muestra cualquier planilla del sistema como una tabla HTML compacta.
@@ -2226,6 +2227,13 @@ def tabla_limpia(
         "dias_para_vencer",
     }
 
+    # Columnas que deben comenzar desde la parte superior de cada fila.
+    # Se normalizan para aceptar nombres internos o visibles con tildes.
+    columnas_alineadas_arriba = {
+        normalizar_texto(columna)
+        for columna in (alinear_arriba_columnas or [])
+    }
+
     def valor_texto(valor):
         if pd.isna(valor):
             return ""
@@ -2239,11 +2247,15 @@ def tabla_limpia(
         texto = valor_texto(valor).strip()
         clave = normalizar_texto(columna)
 
-        clase = (
-            "tabla-celda-centrada"
-            if centrar_todo or clave in columnas_centradas
-            else ""
-        )
+        clases = []
+
+        if centrar_todo or clave in columnas_centradas:
+            clases.append("tabla-celda-centrada")
+
+        if clave in columnas_alineadas_arriba:
+            clases.append("tabla-celda-arriba")
+
+        clase = " ".join(clases)
 
         es_columna_enlace = clave in {
             "ruta_link",
@@ -2361,6 +2373,10 @@ def tabla_limpia(
 
 .tabla-general-compacta .tabla-celda-centrada {{
     text-align: center;
+}}
+
+.tabla-general-compacta .tabla-celda-arriba {{
+    vertical-align: top !important;
 }}
 
 .tabla-general-compacta a {{
@@ -5152,6 +5168,13 @@ def pagina_reportabilidad(datos, filtros):
             "Evidencia",
         ],
         height=430,
+        alinear_arriba_columnas=[
+            "Fecha",
+            "Área",
+            "Tipo_Evento",
+            "Descripcion",
+            "Accion_Inmediata",
+        ],
     )
 
     # --------------------------------------------------------------
