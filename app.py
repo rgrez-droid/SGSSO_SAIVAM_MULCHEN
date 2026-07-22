@@ -4421,6 +4421,288 @@ section.main,
         transform-origin: center center;
     }
 }
+
+/* =========================================================
+   DISEÑO RESPONSIVO EXCLUSIVO PARA TELÉFONOS Y TABLETS
+   No modifica la presentación de escritorio.
+   ========================================================= */
+@media (max-width: 900px) {
+    :root {
+        --sidebar-fixed-width: 100%;
+    }
+
+    html,
+    body,
+    .stApp,
+    [data-testid="stAppViewContainer"] {
+        width: 100% !important;
+        max-width: 100% !important;
+        overflow-x: hidden !important;
+    }
+
+    /* En móvil, el menú lateral se transforma en una barra superior. */
+    [data-testid="stAppViewContainer"] {
+        display: block !important;
+    }
+
+    section[data-testid="stSidebar"] {
+        position: sticky !important;
+        top: 0 !important;
+        left: 0 !important;
+        width: 100% !important;
+        min-width: 100% !important;
+        max-width: 100% !important;
+        height: auto !important;
+        min-height: 0 !important;
+        max-height: none !important;
+        flex: none !important;
+        align-self: auto !important;
+        overflow: visible !important;
+        border-right: 0 !important;
+        border-bottom: 1px solid rgba(134,239,172,.32) !important;
+        box-shadow: 0 8px 22px rgba(0,0,0,.30) !important;
+        z-index: 9999 !important;
+    }
+
+    section[data-testid="stSidebar"] > div,
+    section[data-testid="stSidebar"] [data-testid="stSidebarContent"],
+    section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+        width: 100% !important;
+        max-width: 100% !important;
+        height: auto !important;
+        min-height: 0 !important;
+        overflow: visible !important;
+        box-sizing: border-box !important;
+    }
+
+    section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+        padding: 6px 8px 7px 8px !important;
+    }
+
+    .menu-brand {
+        min-height: 38px !important;
+        gap: 7px !important;
+        padding: 0 2px 5px 2px !important;
+        margin: 0 0 5px 0 !important;
+    }
+
+    .menu-logo-shell {
+        width: 35px !important;
+        height: 35px !important;
+        min-width: 35px !important;
+    }
+
+    .menu-title {
+        font-size: 10.5px !important;
+        line-height: 1.08 !important;
+    }
+
+    .menu-subtitle {
+        font-size: 8.2px !important;
+        margin-top: 2px !important;
+    }
+
+    /* Navegación horizontal desplazable con el dedo. */
+    section[data-testid="stSidebar"] div[role="radiogroup"] {
+        display: flex !important;
+        flex-direction: row !important;
+        flex-wrap: nowrap !important;
+        align-items: stretch !important;
+        gap: 6px !important;
+        width: 100% !important;
+        padding: 0 0 4px 0 !important;
+        margin: 0 !important;
+        overflow-x: auto !important;
+        overflow-y: hidden !important;
+        scroll-snap-type: x proximity;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: thin !important;
+    }
+
+    section[data-testid="stSidebar"] div[role="radiogroup"]::-webkit-scrollbar {
+        height: 4px;
+    }
+
+    section[data-testid="stSidebar"] div[role="radiogroup"]::-webkit-scrollbar-thumb {
+        background: rgba(167,243,208,.48);
+        border-radius: 999px;
+    }
+
+    section[data-testid="stSidebar"] div[role="radiogroup"] label {
+        flex: 0 0 auto !important;
+        width: auto !important;
+        min-width: 145px !important;
+        max-width: none !important;
+        min-height: 38px !important;
+        padding: 6px 9px !important;
+        margin: 0 !important;
+        border-radius: 11px !important;
+        scroll-snap-align: start;
+    }
+
+    section[data-testid="stSidebar"] div[role="radiogroup"] p {
+        width: auto !important;
+        font-size: 10.4px !important;
+        line-height: 1.1 !important;
+        white-space: nowrap !important;
+    }
+
+    /* La información contractual queda disponible en escritorio y se oculta
+       en teléfono para priorizar el contenido operativo. */
+    .menu-footer-box,
+    .sidebar-filter-title {
+        display: none !important;
+    }
+
+    [data-testid="stAppViewContainer"] > .main,
+    [data-testid="stAppViewContainer"] > section[data-testid="stMain"] {
+        display: block !important;
+        width: 100% !important;
+        max-width: 100% !important;
+        min-width: 0 !important;
+        margin: 0 !important;
+        overflow-x: hidden !important;
+    }
+
+    .main .block-container,
+    [data-testid="stMain"] .block-container,
+    [data-testid="stMainBlockContainer"] {
+        width: 100% !important;
+        max-width: 100% !important;
+        min-width: 0 !important;
+        padding: .7rem .65rem 1.1rem .65rem !important;
+        margin: 0 !important;
+        box-sizing: border-box !important;
+    }
+
+    /* Encabezado legible: en escritorio continúa en una sola línea. */
+    .app-topbar {
+        display: block !important;
+        margin-bottom: 9px !important;
+    }
+
+    .title-main {
+        width: 100% !important;
+        max-width: 100% !important;
+        font-size: clamp(17px, 5.4vw, 23px) !important;
+        line-height: 1.10 !important;
+        letter-spacing: -.45px !important;
+        white-space: normal !important;
+        overflow-wrap: anywhere !important;
+    }
+
+    .subtitle-main {
+        width: 100% !important;
+        max-width: 100% !important;
+        margin-top: 5px !important;
+        font-size: 11px !important;
+        line-height: 1.35 !important;
+    }
+
+    .main-logo-card {
+        display: none !important;
+    }
+
+    .panel-title {
+        font-size: 18px !important;
+        line-height: 1.16 !important;
+        margin-top: 12px !important;
+    }
+
+    /* Las columnas de Streamlit se apilan solo en móvil. */
+    [data-testid="stMain"] [data-testid="stHorizontalBlock"] {
+        display: flex !important;
+        flex-direction: column !important;
+        flex-wrap: nowrap !important;
+        gap: .7rem !important;
+        width: 100% !important;
+    }
+
+    [data-testid="stMain"] [data-testid="column"] {
+        flex: 1 1 100% !important;
+        width: 100% !important;
+        min-width: 100% !important;
+        max-width: 100% !important;
+    }
+
+    .kpi-card {
+        min-height: 0 !important;
+        padding: 13px 14px !important;
+        border-radius: 15px !important;
+    }
+
+    .kpi-icon {
+        width: 46px !important;
+        height: 46px !important;
+        border-radius: 14px !important;
+        font-size: 23px !important;
+        margin-bottom: 8px !important;
+    }
+
+    .kpi-value {
+        font-size: 23px !important;
+        margin-top: 5px !important;
+    }
+
+    .kpi-sub {
+        margin-top: 6px !important;
+    }
+
+    [data-testid="stPlotlyChart"],
+    [data-testid="stDataFrame"],
+    div[data-testid="stVerticalBlockBorderWrapper"] {
+        width: 100% !important;
+        max-width: 100% !important;
+        min-width: 0 !important;
+        box-sizing: border-box !important;
+    }
+
+    /* Las tablas extensas conservan sus columnas y permiten desplazamiento
+       horizontal, evitando que el texto quede ilegible. */
+    .tabla-general-wrap,
+    .cert-table-wrap {
+        width: 100% !important;
+        max-width: 100% !important;
+        overflow-x: auto !important;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .tabla-general-wrap table,
+    .cert-table-wrap table {
+        min-width: 760px !important;
+    }
+
+    .recognition-photo-card {
+        width: 100% !important;
+        border-radius: 14px !important;
+    }
+
+    .recognition-photo-img {
+        width: 100% !important;
+        height: auto !important;
+        max-height: 68vh !important;
+        object-fit: contain !important;
+    }
+
+    /* Los sellos de agua pasan a ocupar todo el ancho del teléfono. */
+    .panel-watermark-layer,
+    .saivam-page-watermark-layer,
+    .cumplimientos-watermark-layer,
+    .recognition-watermark-layer,
+    .certification-watermark-layer {
+        left: 0 !important;
+        right: 0 !important;
+        width: 100vw !important;
+        max-width: 100vw !important;
+    }
+
+    .footer-app {
+        margin-top: 18px !important;
+        padding: 0 6px !important;
+        font-size: 9.5px !important;
+    }
+}
+
 </style>
     """
     css = css.replace("__FONDO__", fondo_css)
