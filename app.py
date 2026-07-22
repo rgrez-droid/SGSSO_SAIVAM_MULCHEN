@@ -1,14 +1,11 @@
 import base64
 import glob
-import io
-import mimetypes
 import os
 import re
 from datetime import datetime
 from urllib.parse import quote
 
 import pandas as pd
-import requests
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
@@ -18,77 +15,78 @@ import streamlit as st
 # CONFIGURACIÓN GENERAL
 # =========================================================
 
-# Carpeta donde se encuentra este archivo. Permite cargar la planilla,
-# logos y fondos aunque Streamlit se ejecute desde otro directorio.
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
-
-def ruta_app(*partes):
-    return os.path.join(APP_DIR, *partes)
-
 st.set_page_config(
-    page_title="Sistema de Gestión SSO SAIVAM Mulchén",
-    page_icon="🛡️",
+    page_title="Seguimiento y Control de Equipos Móviles",
+    page_icon="🚜",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="auto",
 )
 
-# Reduce conflictos del DOM provocados por la traducción automática del navegador.
+# =========================================================
+# CORRECCIÓN DE CARGA INICIAL
+# =========================================================
+# Evita que las distintas versiones del sello de agua se muestren
+# como una pantalla inicial mientras Streamlit todavía carga los datos.
+# El selector tiene mayor especificidad que los estilos antiguos del archivo.
 st.markdown(
     """
-    <meta name="google" content="notranslate">
-    <style>
-        html, body, [data-testid="stAppViewContainer"] {
-            translate: no;
-        }
-    </style>
+<style>
+html body .stApp::before,
+html body .stApp::after,
+html body .stApp [class*="watermark"],
+html body .stApp [class*="Watermark"],
+html body .stApp [class*="sello"],
+html body .stApp [class*="Sello"],
+html body .stApp .saivam-watermark-fixed,
+html body .stApp .saivam-watermark-v38,
+html body .stApp .saivam-marca-principal {
+    content: none !important;
+    display: none !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+    background: none !important;
+    background-image: none !important;
+    pointer-events: none !important;
+}
+</style>
     """,
     unsafe_allow_html=True,
 )
 
-AUTOR = "Ricardo Grez"
-EMPRESA = "SAIVAM"
-CONTRATO = "CMPC Mulchén"
-VERSION = "1.4.14"
-REVISION_CODIGO = "21-07-2026-R41-REPORTABILIDAD-EVIDENCIA"
-
-print(
-    f"[SSO] Ejecutando archivo corregido: {os.path.abspath(__file__)} "
-    f"| revisión {REVISION_CODIGO}"
-)
-
-# Fecha base para días sin accidentes si no existe hoja Configuracion.
-# Puedes modificarla directamente o dejarla en la hoja Configuracion.
-FECHA_INICIO_SIN_ACCIDENTES_DEFAULT = "01/04/2023"
-
 # =========================================================
 # GOOGLE SHEETS
 # =========================================================
-# Documento principal que alimenta toda la aplicación.
-# La planilla debe estar compartida como "Cualquier persona con el enlace:
-# Lector" o publicada en la web.
-GOOGLE_SHEET_ID = "1GrwPn86i7dYnYxkLrr-bVeueUSh5eXqL"
+# Esta app ya NO usa archivo Excel local.
+# Lee directamente desde Google Sheets usando el enlace público/compartido.
+#
+# IMPORTANTE:
+# En Google Sheets debes dejar el archivo con acceso:
+# Compartir > Cualquier persona con el enlace > Lector.
 
-# Identificador exacto de la pestaña "Cumplimientos SSO".
-# Se obtiene desde el parámetro gid del enlace compartido por el usuario.
-# Leer esta pestaña por GID evita depender del nombre visible de la hoja.
-CUMPLIMIENTOS_SSO_GID = "745436880"
+GOOGLE_SHEET_ID = "1lgriBV9dO_XnIKaYcKBn3XiK82CdLsWWA4JWhAK32H8"
+GOOGLE_SHEET_URL = f"https://docs.google.com/spreadsheets/d/{GOOGLE_SHEET_ID}/edit"
 
-# Si una pestaña no puede leerse desde Google Sheets, el sistema conserva
-# como respaldo la lectura desde el archivo Excel local.
-USAR_GOOGLE_SHEETS = True
-
-ARCHIVOS_EXCEL_POSIBLES = [
-    # Base alineada con el menú actual de la aplicación.
-    "Base_Datos_SSO_SAIVAM_Mulchen.xlsx",
-    # Compatibilidad con versiones anteriores.
-    "Base_Datos_SGS_SAIVAM_Mulchen.xlsx",
-    "Base_Datos_SGS_SAIVAM_Mulchen (1).xlsx",
-    # También reconoce la versión prototipo creada inicialmente.
-    "Base_Datos_SGS_SAIVAM_Mulchen_Prototipo.xlsx",
-    "BASE SGS SAIVAM MULCHEN.xlsx",
-    "SGS_SAIVAM_MULCHEN.xlsx",
-    "Sistema_Gestion_SSO_SAIVAM_Mulchen.xlsx",
+HOJAS_GOOGLE_SHEETS = [
+    "EQUIPOS",
+    "MANTENCIONES",
+    "GASTOS_ADICIONALES",
+    "CHECKLIST",
+    "COMBUSTIBLE",
+    "DOCUMENTOS",
 ]
+
+# Tiempo de actualización automática de datos desde Google Sheets.
+# 60 segundos permite que la app se actualice sin tener que subir archivos a GitHub.
+CACHE_GOOGLE_SHEETS_SEGUNDOS = 60
+
+LOGO_SUPERIOR = "logo1.png"
+
+AUTOR = "Ricardo Grez"
+CARGO_AUTOR = "Contract Manager"
+EMPRESA = "SAIVAM"
+CONTRATO = "CMPC Mulchén"
+CLIENTE = "CMPC"
+VERSION = "1.0"
 
 MESES = {
     1: "Enero",
@@ -105,136 +103,100 @@ MESES = {
     12: "Diciembre",
 }
 
-HOY = pd.Timestamp.today().normalize()
+COLOR_TEXTO = "#0f172a"
+COLOR_GRIS = "#64748b"
+
+CARPETAS_IMAGENES = [
+    ".",
+    "fotos",
+    "imagenes",
+    "images",
+    "equipos",
+    "assets",
+    "img",
+]
+
+EXTENSIONES_IMAGEN = [
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".webp",
+    ".PNG",
+    ".JPG",
+    ".JPEG",
+    ".WEBP",
+]
 
 
 # =========================================================
-# ESTRUCTURA DE HOJAS / BASE DE DATOS
+# MAPEO DE EQUIPOS A IMÁGENES
 # =========================================================
 
-SHEETS = {
-    "Incidentes": {
-        # La pestaña visible en Google Sheets se llama "Reportabilidad",
-        # pero internamente la aplicación conserva la clave "Incidentes"
-        # para mantener compatibilidad con el panel general y sus indicadores.
-        "nombres": [
-            "Reportabilidad",
-            "Incidentes",
-            "Incidentes y reportes",
-            "Incidentes_y_Reportes",
-            "Reportes",
-        ],
-        "secret": "reportabilidad_url",
-        "columnas": [
-            "Fecha",
-            "Área",
-            "Tipo_Evento",
-            "Descripcion",
-            "Accion_Inmediata",
-            "Responsable",
-            "Estado",
-            "Evidencia",
-        ],
-    },
-    "Cumplimientos_SSO": {
-        "nombres": [
-            "Cumplimientos SSO",
-            "Cumplimiento SSO",
-            "Cumplimientos_SSO",
-            "Cumplimiento_SSO",
-        ],
-        "secret": "cumplimientos_sso_url",
-        "columnas": [
-            "Observador", "Actividad",
-            "ENE", "RE_ENE", "FEB", "RE_FEB", "MAR", "RE_MAR",
-            "ABR", "RE_ABR", "MAY", "RE_MAY", "JUN", "RE_JUN",
-            "JUL", "RE_JUL", "AGO", "RE_AGO", "SEP", "RE_SEP",
-            "OCT", "RE_OCT", "NOV", "RE_NOV", "DIC", "RE_DIC",
-        ],
-    },
-    "Capacitaciones": {
-        "nombres": ["Capacitaciones", "Charlas", "Charlas_Capacitaciones"],
-        "secret": "capacitaciones_url",
-        # Estructura exacta de la pestaña "Capacitaciones" en Google Sheets.
-        "columnas": [
-            "Fecha", "Tema", "Tipo", "Área", "Responsable",
-            "Vencimiento", "Estado", "Observacion", "Evidencia",
-        ],
-    },
-    "Programa_Anual": {
-        "nombres": [
-            "PRG_SSO_2026",
-            "PRG SSO 2026",
-            "Programa_Anual",
-            "Programa Anual de Seguridad",
-        ],
-        "secret": "programa_anual_url",
-        # Estructura vigente de la pestaña PRG_SSO_2026.
-        "columnas": [
-            "Mes",
-            "Eje_Trabajo",
-            "Actividad",
-            "Tipo_Actividad",
-            "Fecha_Programada",
-            "Fecha_Realizacion",
-            "Responsable",
-            "Estado",
-            "Evidencia",
-            "Observacion",
-        ],
-    },
-    "Reconocimientos": {
-        "nombres": ["Reconocimientos", "Reconocimiento", "Premios", "Destacados"],
-        "secret": "reconocimientos_url",
-        "columnas": [
-            "Fecha", "Trabajador", "Cargo", "Motivo", "Periodo",
-            "Estado", "Evidencia", "Observacion",
-        ],
-    },
-    "Comite_Paritario": {
-        "nombres": ["Comite_Paritario", "Comité Paritario", "Comite Paritario", "CPHS"],
-        "secret": "comite_paritario_url",
-        "columnas": [
-            "Fecha", "Tipo_Reunion", "Área", "Tema", "Acuerdo",
-            "Responsable", "Fecha_Compromiso", "Estado", "Evidencia",
-            "Observacion",
-        ],
-    },
-    "Protocolos_MINSAL": {
-        "nombres": ["Protocolos_MINSAL", "Protocolos MINSAL", "MINSAL"],
-        "secret": "protocolos_minsal_url",
-        "columnas": [
-            "Fecha", "Protocolo", "Etapa", "Área", "Actividad", "Expuestos",
-            "Responsable", "Resultado", "Fecha_Compromiso", "Estado",
-            "Evidencia", "Observacion",
-        ],
-    },
-    "Certificaciones": {
-        "nombres": ["Certificaciones", "Certificaciones_Maestro", "Certificados"],
-        "secret": "certificaciones_url",
-        "columnas": [
-            "Fecha",
-            "Categoria",
-            "Subcategoria",
-            "Nombre_Certificacion",
-            "Entidad_Emisora",
-            "Vencimiento",
-            "Estado",
-            "Dias_Para_Vencer",
-            "Ruta_Link",
-        ],
-    },
-    "Configuracion": {
-        "nombres": ["Configuracion", "Configuración", "Config"],
-        "secret": "configuracion_url",
-        "columnas": ["Parametro", "Valor"],
-    },
+MAPEO_EXACTO_EQUIPOS = {
+    "camion_ford_cargo": "camion_ford",
+    "camion_ford": "camion_ford",
+    "ford_cargo": "camion_ford",
+    "carro_de_arrastre": "carro_arrastre",
+    "carro_arrastre": "carro_arrastre",
+    "minicargador": "minicargador",
+    "mini_cargador": "minicargador",
+    "barredora_tennant_s30": "barredora",
+    "barredora": "barredora",
+    "tennant_s30": "barredora",
+    "camioneta_mitsubishi": "camioneta",
+    "camioneta": "camioneta",
+    "mitsubishi": "camioneta",
+    "alza_hombre": "alza_hombre",
+    "alzahombre": "alza_hombre",
+    "grua_horquilla": "grua_orquilla",
+    "grua_orquilla": "grua_orquilla",
+    "horquilla": "grua_orquilla",
+    "orquilla": "grua_orquilla",
+    "montacarga": "grua_orquilla",
+    "montacargas": "grua_orquilla",
+}
+
+MAPEO_ID_EQUIPO_IMAGEN = {
+    "EQ-001": "camion_ford",
+    "EQ001": "camion_ford",
+    "EQ-002": "carro_arrastre",
+    "EQ002": "carro_arrastre",
+    "EQ-003": "minicargador",
+    "EQ003": "minicargador",
+    "EQ-004": "barredora",
+    "EQ004": "barredora",
+    "EQ-005": "camioneta",
+    "EQ005": "camioneta",
+    "EQ-006": "alza_hombre",
+    "EQ006": "alza_hombre",
+    "EQ-007": "grua_orquilla",
+    "EQ007": "grua_orquilla",
 }
 
 
 # =========================================================
-# UTILIDADES GENERALES
+# UTILIDADES
 # =========================================================
+
+def archivo_a_base64(ruta):
+    if not ruta or not os.path.exists(ruta):
+        return ""
+
+    with open(ruta, "rb") as archivo:
+        return base64.b64encode(archivo.read()).decode("utf-8")
+
+
+def extension_mime(ruta):
+    ext = os.path.splitext(ruta)[1].lower()
+
+    if ext in [".jpg", ".jpeg"]:
+        return "image/jpeg"
+
+    if ext == ".webp":
+        return "image/webp"
+
+    return "image/png"
+
 
 def normalizar_texto(texto):
     texto = str(texto).lower().strip()
@@ -247,67 +209,17 @@ def normalizar_texto(texto):
         "ñ": "n",
         "ü": "u",
     }
+
     for original, nuevo in reemplazos.items():
         texto = texto.replace(original, nuevo)
+
     texto = re.sub(r"[^a-z0-9]+", "_", texto)
     texto = re.sub(r"_+", "_", texto).strip("_")
     return texto
 
 
-def limpiar_numero(valor):
-    if pd.isna(valor):
-        return 0.0
-    if isinstance(valor, (int, float)):
-        return float(valor)
-    texto = re.sub(r"[^0-9,.-]", "", str(valor))
-    if texto in ["", "-"]:
-        return 0.0
-    if "," in texto:
-        texto = texto.replace(".", "").replace(",", ".")
-    elif "." in texto and len(texto.split(".")[-1]) == 3:
-        texto = texto.replace(".", "")
-    try:
-        return float(texto)
-    except ValueError:
-        return 0.0
-
-
-def numero(valor):
-    try:
-        return f"{float(valor):,.0f}".replace(",", ".")
-    except Exception:
-        return "0"
-
-
-def porcentaje(valor):
-    try:
-        return f"{float(valor):.0f}%".replace(".", ",")
-    except Exception:
-        return "0%"
-
-
-def convertir_fecha(valor):
-    if pd.isna(valor):
-        return pd.NaT
-    if isinstance(valor, pd.Timestamp):
-        return valor
-    if isinstance(valor, datetime):
-        return pd.Timestamp(valor)
-    if isinstance(valor, (int, float)):
-        try:
-            return pd.to_datetime(valor, unit="D", origin="1899-12-30", errors="coerce")
-        except Exception:
-            return pd.NaT
-    return pd.to_datetime(valor, errors="coerce", dayfirst=True)
-
-
-def fecha_texto(valor):
-    if pd.isna(valor):
-        return ""
-    try:
-        return pd.to_datetime(valor).strftime("%d/%m/%Y")
-    except Exception:
-        return ""
+def normalizar_id_equipo(texto):
+    return str(texto).upper().strip().replace(" ", "")
 
 
 def escape_html(texto):
@@ -320,127 +232,324 @@ def escape_html(texto):
     return texto
 
 
+def listar_imagenes_disponibles():
+    imagenes = []
+
+    for carpeta in CARPETAS_IMAGENES:
+        if not os.path.exists(carpeta):
+            continue
+
+        for extension in EXTENSIONES_IMAGEN:
+            imagenes.extend(glob.glob(os.path.join(carpeta, f"*{extension}")))
+
+    return imagenes
+
+
+def buscar_imagen_por_nombre(nombre_base):
+    if not nombre_base or str(nombre_base).strip().lower() in ["", "nan", "none"]:
+        return None
+
+    nombre_base = str(nombre_base).strip()
+    nombre_norm = normalizar_texto(nombre_base)
+
+    if os.path.exists(nombre_base):
+        return nombre_base
+
+    posibles_nombres = list(
+        dict.fromkeys(
+            [
+                nombre_base,
+                nombre_norm,
+                nombre_base.replace(" ", "_"),
+                nombre_base.replace(" ", "-"),
+                nombre_norm.replace("_", "-"),
+            ]
+        )
+    )
+
+    for carpeta in CARPETAS_IMAGENES:
+        for nombre in posibles_nombres:
+            for extension in EXTENSIONES_IMAGEN:
+                ruta = os.path.join(carpeta, nombre + extension)
+                if os.path.exists(ruta):
+                    return ruta
+
+    imagenes = listar_imagenes_disponibles()
+
+    for ruta in imagenes:
+        base_archivo = os.path.splitext(os.path.basename(ruta))[0]
+        base_norm = normalizar_texto(base_archivo)
+
+        if nombre_norm == base_norm:
+            return ruta
+
+    for ruta in imagenes:
+        base_archivo = os.path.splitext(os.path.basename(ruta))[0]
+        base_norm = normalizar_texto(base_archivo)
+
+        if nombre_norm in base_norm or base_norm in nombre_norm:
+            return ruta
+
+    return None
+
+
+def buscar_imagen_equipo(fila):
+    equipo = str(fila.get("Equipo", "")).strip()
+    id_equipo = str(fila.get("ID_Equipo", "")).strip()
+    tipo_equipo = str(fila.get("Tipo_Equipo", "")).strip()
+    patente_codigo = str(fila.get("Patente_Codigo", "")).strip()
+    marca = str(fila.get("Marca", "")).strip()
+    modelo = str(fila.get("Modelo", "")).strip()
+    imagen_excel = str(fila.get("Imagen", "")).strip()
+
+    candidatos = []
+
+    id_normal = normalizar_id_equipo(id_equipo)
+    id_sin_guion = id_normal.replace("-", "")
+
+    if id_normal in MAPEO_ID_EQUIPO_IMAGEN:
+        candidatos.append(MAPEO_ID_EQUIPO_IMAGEN[id_normal])
+
+    if id_sin_guion in MAPEO_ID_EQUIPO_IMAGEN:
+        candidatos.append(MAPEO_ID_EQUIPO_IMAGEN[id_sin_guion])
+
+    if imagen_excel and imagen_excel.lower() not in ["nan", "none", ""]:
+        candidatos.append(imagen_excel)
+        candidatos.append(normalizar_texto(imagen_excel))
+
+    texto_equipo = " ".join(
+        [
+            equipo,
+            tipo_equipo,
+            patente_codigo,
+            marca,
+            modelo,
+        ]
+    )
+
+    texto_norm = normalizar_texto(texto_equipo)
+    equipo_norm = normalizar_texto(equipo)
+    tipo_norm = normalizar_texto(tipo_equipo)
+
+    for valor in [texto_norm, equipo_norm, tipo_norm]:
+        if valor in MAPEO_EXACTO_EQUIPOS:
+            candidatos.append(MAPEO_EXACTO_EQUIPOS[valor])
+
+    if "grua" in texto_norm or "horquilla" in texto_norm or "orquilla" in texto_norm:
+        candidatos.insert(0, "grua_orquilla")
+
+    if "camioneta" in texto_norm or "mitsubishi" in texto_norm:
+        candidatos.insert(0, "camioneta")
+
+    if "camion" in texto_norm and "ford" in texto_norm:
+        candidatos.insert(0, "camion_ford")
+
+    if "ford_cargo" in texto_norm:
+        candidatos.insert(0, "camion_ford")
+
+    if "carro" in texto_norm and "arrastre" in texto_norm:
+        candidatos.insert(0, "carro_arrastre")
+
+    if "minicargador" in texto_norm or "mini_cargador" in texto_norm:
+        candidatos.insert(0, "minicargador")
+
+    if "barredora" in texto_norm or "tennant" in texto_norm:
+        candidatos.insert(0, "barredora")
+
+    if "alza" in texto_norm and "hombre" in texto_norm:
+        candidatos.insert(0, "alza_hombre")
+
+    candidatos.extend(
+        [
+            id_equipo,
+            equipo,
+            tipo_equipo,
+            patente_codigo,
+            marca,
+            modelo,
+            texto_equipo,
+        ]
+    )
+
+    candidatos = list(dict.fromkeys([c for c in candidatos if str(c).strip() != ""]))
+
+    for candidato in candidatos:
+        ruta = buscar_imagen_por_nombre(candidato)
+        if ruta:
+            return ruta
+
+    return None
+
+
+def imagen_equipo_src(fila):
+    ruta = buscar_imagen_equipo(fila)
+
+    if not ruta:
+        return ""
+
+    imagen_b64 = archivo_a_base64(ruta)
+    mime = extension_mime(ruta)
+
+    if not imagen_b64:
+        return ""
+
+    return f"data:{mime};base64,{imagen_b64}"
+
+
+def url_csv_google_sheet(nombre_hoja):
+    """Construye la URL CSV de una hoja específica de Google Sheets.
+    Funciona si el archivo está compartido como lector para cualquier persona con el enlace.
+    """
+    hoja_codificada = quote(str(nombre_hoja), safe="")
+    return (
+        f"https://docs.google.com/spreadsheets/d/{GOOGLE_SHEET_ID}/gviz/tq"
+        f"?tqx=out:csv&sheet={hoja_codificada}"
+    )
+
+
+def leer_hoja_google_sheet(nombre_hoja):
+    """Lee una hoja de Google Sheets como DataFrame.
+    Si la hoja no existe o está vacía, devuelve un DataFrame vacío para no botar la app.
+    """
+    try:
+        df = pd.read_csv(url_csv_google_sheet(nombre_hoja))
+    except Exception:
+        return pd.DataFrame()
+
+    # Elimina columnas automáticas sin nombre y filas completamente vacías.
+    df = df.loc[:, ~df.columns.astype(str).str.contains(r"^Unnamed", case=False, regex=True)]
+    df = df.dropna(how="all")
+
+    # Elimina filas que vienen vacías desde formato de Google Sheets.
+    if not df.empty:
+        texto_fila = df.fillna("").astype(str).agg("".join, axis=1).str.strip()
+        df = df[texto_fila != ""].copy()
+
+    return normalizar_columnas_dataframe(df)
+
+
+def limpiar_numero(valor):
+    if pd.isna(valor):
+        return 0.0
+
+    # Si Excel trae un monto mal formateado como fecha, se recupera el número serial.
+    # Ejemplo: una celda con 42000 formateada como fecha aparece como 27-12-2014.
+    if isinstance(valor, (pd.Timestamp, datetime)):
+        try:
+            return float((pd.to_datetime(valor) - pd.Timestamp("1899-12-30")).days)
+        except Exception:
+            return 0.0
+
+    if isinstance(valor, (int, float)):
+        return float(valor)
+
+    texto = re.sub(r"[^0-9,.-]", "", str(valor))
+
+    if texto in ["", "-"]:
+        return 0.0
+
+    if "," in texto:
+        texto = texto.replace(".", "").replace(",", ".")
+
+    elif "." in texto and len(texto.split(".")[-1]) == 3:
+        texto = texto.replace(".", "")
+
+    try:
+        return float(texto)
+    except ValueError:
+        return 0.0
+
+
+
+
 def normalizar_columnas_dataframe(df):
+    """Normaliza encabezados de Excel editados manualmente.
+    Evita errores cuando una columna viene con espacios, saltos de línea,
+    acentos o pequeñas variaciones de nombre.
+    """
     if df is None or df.empty:
         return df
 
     alias = {
-        "fecha": "Fecha",
-        "area": "Área",
-        "área": "Área",
-        "trabajador": "Trabajador",
-        "supervisor": "Supervisor",
-        "actividad": "Actividad",
-        "mes": "Mes",
-        "eje_trabajo": "Eje_Trabajo",
-        "ejetrabajo": "Eje_Trabajo",
-        "fecha_programada": "Fecha_Programada",
-        "fechaprogramada": "Fecha_Programada",
-        "fecha_realizacion": "Fecha_Realizacion",
-        "fecharealizacion": "Fecha_Realizacion",
-        "tipo_observacion": "Tipo_Observacion",
-        "tipoobservacion": "Tipo_Observacion",
-        "tipo_observación": "Tipo_Observacion",
-        "conducta_segura": "Conducta_Segura",
-        "conductasegura": "Conducta_Segura",
-        "conducta_riesgo": "Conducta_Riesgo",
-        "conductariesgo": "Conducta_Riesgo",
-        "medida_correctiva": "Medida_Correctiva",
-        "medidacorrectiva": "Medida_Correctiva",
-        "responsable": "Responsable",
-        "fecha_compromiso": "Fecha_Compromiso",
-        "fechacompromiso": "Fecha_Compromiso",
+        "id_equipo": "ID_Equipo",
+        "idequipo": "ID_Equipo",
+        "id_mantencion": "ID_Mantencion",
+        "idmantencion": "ID_Mantencion",
+        "equipo": "Equipo",
+        "patente_codigo": "Patente_Codigo",
+        "patentecodigo": "Patente_Codigo",
+        "tipo_equipo": "Tipo_Equipo",
+        "tipoequipo": "Tipo_Equipo",
+        "marca": "Marca",
+        "modelo": "Modelo",
+        "ano": "Año",
+        "año": "Año",
         "estado": "Estado",
+        "area": "Área",
+        "responsable": "Responsable",
+        "imagen": "Imagen",
+        "fecha_ingreso": "Fecha_Ingreso",
+        "fechaingreso": "Fecha_Ingreso",
+        "km_horometro_actual": "Km_Horometro_Actual",
+        "kmhorometroactual": "Km_Horometro_Actual",
+        "km_horómetro_actual": "Km_Horometro_Actual",
+        "unidad_control": "Unidad_Control",
+        "unidadcontro": "Unidad_Control",
+        "unidad_control_": "Unidad_Control",
+        "frecuencia_mantencion": "Frecuencia_Mantencion",
+        "frecuenciamantencion": "Frecuencia_Mantencion",
+        "frecuencia_mantención": "Frecuencia_Mantencion",
+        "proxima_mantencion": "Proxima_Mantencion",
+        "proximamantencion": "Proxima_Mantencion",
+        "proxima_mantencio": "Proxima_Mantencion",
+        "proximamantencio": "Proxima_Mantencion",
+        "proxima_mantención": "Proxima_Mantencion",
+        "prox_mantencion": "Proxima_Mantencion",
+        "proxima": "Proxima_Mantencion",
         "observacion": "Observacion",
         "observación": "Observacion",
-        "tipo_evento": "Tipo_Evento",
-        "tipoevento": "Tipo_Evento",
-        "gravedad": "Gravedad",
-        "descripcion": "Descripcion",
-        "descripción": "Descripcion",
-        "accion_inmediata": "Accion_Inmediata",
-        "acción_inmediata": "Accion_Inmediata",
-        "accioninmediata": "Accion_Inmediata",
-        "tipo_inspeccion": "Tipo_Inspeccion",
-        "tipoinspeccion": "Tipo_Inspeccion",
-        "tipo_inspección": "Tipo_Inspeccion",
-        "resultado": "Resultado",
-        "hallazgos": "Hallazgos",
-        "origen": "Origen",
-        "hallazgo": "Hallazgo",
-        "accion_correctiva": "Accion_Correctiva",
-        "acción_correctiva": "Accion_Correctiva",
-        "accioncorrectiva": "Accion_Correctiva",
-        "evidencia": "Evidencia",
-        "tema": "Tema",
-        "tipo": "Tipo",
-        "relator": "Relator",
-        "asistentes": "Asistentes",
-        "vencimiento": "Vencimiento",
-        "vencimient": "Vencimiento",
-        "dias_para_vencer": "Dias_Para_Vencer",
-        "días_para_vencer": "Dias_Para_Vencer",
-        "diasparavencer": "Dias_Para_Vencer",
-        "díasparavencer": "Dias_Para_Vencer",
-        "cargo": "Cargo",
-        "epp": "EPP",
-        "cantidad": "Cantidad",
-        "proxima_reposicion": "Proxima_Reposicion",
-        "próxima_reposición": "Proxima_Reposicion",
-        "proximareposicion": "Proxima_Reposicion",
-        "tipo_actividad": "Tipo_Actividad",
-        "tipoactividad": "Tipo_Actividad",
-        "cumplimiento": "Cumplimiento",
-        "tipo_reconocimiento": "Tipo_Reconocimiento",
-        "tiporeconocimiento": "Tipo_Reconocimiento",
-        "motivo": "Motivo",
-        "periodo": "Periodo",
-        "tipo_reunion": "Tipo_Reunion",
-        "tiporeunion": "Tipo_Reunion",
-        "acuerdo": "Acuerdo",
-        "tipo_trabajo": "Tipo_Trabajo",
-        "tipotrabajo": "Tipo_Trabajo",
-        "permiso": "Permiso",
-        "tipo_documento": "Tipo_Documento",
-        "tipodocumento": "Tipo_Documento",
-        "nombre_documento": "Nombre_Documento",
-        "nombredocumento": "Nombre_Documento",
-        "version": "Version",
-        "versión": "Version",
-        "ruta_link": "Ruta_Link",
-        "rutalink": "Ruta_Link",
-        "link": "Ruta_Link",
-        "parametro": "Parametro",
-        "parámetro": "Parametro",
-        "protocolo": "Protocolo",
-        "etapa": "Etapa",
-        "expuestos": "Expuestos",
+        "fecha": "Fecha",
+        "tipo_mantencion": "Tipo_Mantencion",
+        "tipomantencion": "Tipo_Mantencion",
+        "tipo_mantención": "Tipo_Mantencion",
+        "mantencion": "Tipo_Mantencion",
+        "mantención": "Tipo_Mantencion",
+        "mantencion_tipo": "Tipo_Mantencion",
+        "mantenciontipo": "Tipo_Mantencion",
         "categoria": "Categoria",
         "categoría": "Categoria",
-        "subcategoria": "Subcategoria",
-        "subcategoría": "Subcategoria",
-        "titular_activo": "Titular_Activo",
-        "titularactivo": "Titular_Activo",
-        "nombre_certificacion": "Nombre_Certificacion",
-        "nombre_certificación": "Nombre_Certificacion",
-        "nombrecertificacion": "Nombre_Certificacion",
-        "entidad_emisora": "Entidad_Emisora",
-        "entidademisora": "Entidad_Emisora",
-        "numero_certificado": "Numero_Certificado",
-        "número_certificado": "Numero_Certificado",
-        "numerocertificado": "Numero_Certificado",
-        "valor": "Valor",
+        "proveedor": "Proveedor",
+        "descripcion": "Descripcion",
+        "descripción": "Descripcion",
+        "estado_mantencion": "Estado_Mantencion",
+        "estado_mantención": "Estado_Mantencion",
+        "documento_respaldo": "Documento_Respaldo",
+        "documentorespaldo": "Documento_Respaldo",
+        "costo_clp": "Costo_CLP",
+        "costoclp": "Costo_CLP",
+        "costo": "Costo_CLP",
+        "monto": "Costo_CLP",
+        "valor": "Costo_CLP",
+        "tipo_gasto": "Tipo_Gasto",
+        "tipogasto": "Tipo_Gasto",
+        "costo_total": "Costo_Total",
+        "costototal": "Costo_Total",
+        "litros": "Litros",
+        "valor_unitario": "Valor_Unitario",
+        "valorunitario": "Valor_Unitario",
     }
 
     nuevas = {}
     for col in df.columns:
         original = str(col).replace("\n", " ").replace("\r", " ").strip()
-        clave = normalizar_texto(original)
-        clave_sin_guion = clave.replace("_", "")
-        nuevas[col] = alias.get(clave, alias.get(clave_sin_guion, original))
+        clave = normalizar_texto(original).replace("_", "")
+        clave_con_guion = normalizar_texto(original)
+        nuevas[col] = alias.get(clave_con_guion, alias.get(clave, original))
 
     salida = df.rename(columns=nuevas)
 
+    # Si el Excel trae columnas equivalentes duplicadas (por ejemplo Mantencion y Tipo_Mantencion),
+    # se consolidan en una sola columna usando el primer dato válido de izquierda a derecha.
     if salida.columns.duplicated().any():
         consolidado = pd.DataFrame(index=salida.index)
         for columna in dict.fromkeys(salida.columns):
@@ -453,3982 +562,11091 @@ def normalizar_columnas_dataframe(df):
 
     return salida
 
+def convertir_fecha(valor):
+    if pd.isna(valor):
+        return pd.NaT
 
-def asegurar_columnas(df, columnas):
+    if isinstance(valor, pd.Timestamp):
+        return valor
+
+    if isinstance(valor, datetime):
+        return pd.Timestamp(valor)
+
+    if isinstance(valor, (int, float)):
+        try:
+            return pd.to_datetime(
+                valor,
+                unit="D",
+                origin="1899-12-30",
+                errors="coerce",
+            )
+        except Exception:
+            return pd.NaT
+
+    return pd.to_datetime(valor, errors="coerce", dayfirst=True)
+
+
+def pesos(valor):
+    try:
+        return f"{int(round(float(valor))):,}".replace(",", ".") + " $"
+    except Exception:
+        return "0 $"
+
+
+def pesos_html(valor):
+    try:
+        return f"{int(round(float(valor))):,}".replace(",", ".") + " &#36;"
+    except Exception:
+        return "0 &#36;"
+
+
+def numero(valor):
+    try:
+        return f"{float(valor):,.0f}".replace(",", ".")
+    except Exception:
+        return "0"
+
+
+def fecha_texto(valor):
+    if pd.isna(valor):
+        return ""
+
+    try:
+        return pd.to_datetime(valor).strftime("%d/%m/%Y")
+    except Exception:
+        return ""
+
+
+def asegurar_columna(df, columna, valor_default=""):
+    if columna not in df.columns:
+        df[columna] = valor_default
+
+    return df
+
+
+def preparar_fecha_columnas(df, columnas):
     salida = df.copy()
+
     for columna in columnas:
-        if columna not in salida.columns:
-            salida[columna] = ""
-    return salida[columnas + [c for c in salida.columns if c not in columnas]]
-
-
-def preparar_fechas(df):
-    salida = df.copy()
-    columnas_fecha = [
-        "Fecha",
-        "Fecha_Compromiso",
-        "Vencimiento",
-        "Proxima_Reposicion",
-        "Fecha_Programada",
-        "Fecha_Realizacion",
-    ]
-    for columna in columnas_fecha:
         if columna in salida.columns:
             salida[columna] = salida[columna].apply(convertir_fecha)
+
     return salida
 
 
 def preparar_periodo(df):
     salida = df.copy()
+
     if "Fecha" not in salida.columns:
         salida["Fecha"] = pd.NaT
+
     salida["Fecha"] = salida["Fecha"].apply(convertir_fecha)
     salida["Año"] = salida["Fecha"].dt.year
     salida["Mes_Numero"] = salida["Fecha"].dt.month
     salida["Mes"] = salida["Mes_Numero"].map(MESES)
-    salida["Periodo"] = salida["Mes"].fillna("Sin mes") + " " + salida["Año"].fillna(0).astype(int).astype(str)
-    return salida
 
-
-def estado_base(valor):
-    texto = normalizar_texto(valor)
-    if texto in ["", "nan", "none", "nat", "sin_estado"]:
-        return "Sin estado"
-    if "sin_vencimiento" in texto:
-        return "Sin vencimiento"
-    if "por_vencer" in texto or "proximo_a_vencer" in texto:
-        return "Por vencer"
-    if "vigente" in texto:
-        return "Vigente"
-    if "cerr" in texto or "realiz" in texto or "cumpl" in texto or "ok" in texto:
-        return "Cerrada"
-    if "proceso" in texto or "gestion" in texto or "pendiente_ejecucion" in texto:
-        return "En proceso"
-    if "venc" in texto or "atras" in texto:
-        return "Vencida"
-    if "pend" in texto or "abiert" in texto:
-        return "Pendiente"
-    if "no_cumple" in texto or "nocumple" in texto:
-        return "No cumple"
-    return str(valor).strip().capitalize()
-
-
-def normalizar_estados(df):
-    salida = df.copy()
-    if "Estado" not in salida.columns:
-        salida["Estado"] = "Sin estado"
-    salida["Estado"] = salida["Estado"].apply(estado_base)
-    return salida
-
-
-
-def preparar_programa_anual(df):
-    """
-    Limpia y prepara la pestaña PRG_SSO_2026.
-
-    El campo Estado se toma directamente desde Google Sheets. La aplicación no
-    lo recalcula usando Fecha_Programada ni Fecha_Realizacion. De esta forma,
-    cada actividad mantiene exactamente la condición de gestión registrada en
-    la planilla: Cerrada, Pendiente o En proceso.
-    """
-    columnas = SHEETS["Programa_Anual"]["columnas"]
-
-    if df is None:
-        return pd.DataFrame(columns=columnas)
-
-    salida = normalizar_columnas_dataframe(df.copy())
-    salida = asegurar_columnas(salida, columnas)
-    salida = preparar_fechas(salida)
-
-    # Elimina filas sin una actividad real. Esto evita incorporar filas de
-    # apoyo, listas auxiliares o formatos copiados hacia abajo en Google Sheets.
-    mascara_registro = pd.Series(False, index=salida.index)
-    for columna in [
-        "Actividad",
-        "Eje_Trabajo",
-        "Tipo_Actividad",
-        "Fecha_Programada",
-        "Fecha_Realizacion",
-        "Responsable",
-    ]:
-        valores = salida[columna]
-        mascara_registro = mascara_registro | (
-            valores.notna()
-            & valores.astype(str).str.strip().ne("")
-            & valores.astype(str).str.lower().ne("nan")
-            & valores.astype(str).str.lower().ne("nat")
-        )
-
-    salida = salida.loc[mascara_registro].copy()
-
-    if salida.empty:
-        return pd.DataFrame(columns=columnas)
-
-    # Limpieza de textos.
-    for columna in [
-        "Mes",
-        "Eje_Trabajo",
-        "Actividad",
-        "Tipo_Actividad",
-        "Responsable",
-        "Estado",
-        "Evidencia",
-        "Observacion",
-    ]:
-        salida[columna] = (
-            salida[columna]
-            .fillna("")
-            .astype(str)
-            .str.replace(r"\s+", " ", regex=True)
-            .str.strip()
-        )
-
-    # Completa el mes desde la fecha programada cuando la celda Mes está vacía.
-    mes_desde_fecha = salida["Fecha_Programada"].dt.month.map(MESES)
-    mes_vacio = salida["Mes"].eq("") | salida["Mes"].str.lower().eq("nan")
-    salida.loc[mes_vacio, "Mes"] = mes_desde_fecha.loc[mes_vacio].fillna("")
-
-    def estado_desde_sheet(valor):
-        """Normaliza únicamente los tres estados utilizados en PRG_SSO_2026."""
-        estado = normalizar_texto(valor)
-
-        if "cerr" in estado or "realiz" in estado or "cumpl" in estado:
-            return "Cerrada"
-        if "proceso" in estado or "gestion" in estado:
-            return "En proceso"
-        if "pend" in estado or "program" in estado:
-            return "Pendiente"
-
-        # Una celda vacía se mantiene como pendiente para que el registro no se
-        # contabilice erróneamente como cerrado por la fecha de realización.
-        return "Pendiente"
-
-    # Fuente única de verdad: columna Estado de la planilla.
-    salida["Estado"] = salida["Estado"].apply(estado_desde_sheet)
-
-    # Periodo para filtros y ordenamiento del panel.
-    salida["Año"] = salida["Fecha_Programada"].dt.year
-    salida["Mes_Numero"] = salida["Fecha_Programada"].dt.month
     salida["Periodo"] = (
-        salida["Mes"].replace("", "Sin mes")
+        salida["Mes"].fillna("Sin mes")
         + " "
         + salida["Año"].fillna(0).astype(int).astype(str)
     )
 
-    # Orden cronológico; las filas sin fecha quedan al final.
-    salida = salida.sort_values(
-        by=["Fecha_Programada", "Eje_Trabajo", "Actividad"],
-        ascending=[True, True, True],
-        na_position="last",
-    )
-
-    return salida.reset_index(drop=True)
-
-
-def preparar_certificaciones(df):
-    """Limpia la hoja y calcula vigencia y días restantes."""
-    salida = df.copy()
-
-    columnas_clave = [
-        "Fecha",
-        "Categoria",
-        "Subcategoria",
-        "Nombre_Certificacion",
-        "Entidad_Emisora",
-    ]
-
-    # Elimina filas completamente vacías, incluso cuando Excel tiene
-    # fórmulas copiadas hacia abajo.
-    mascara_registro = pd.Series(False, index=salida.index)
-    for columna in columnas_clave:
-        if columna in salida.columns:
-            valores = salida[columna]
-            mascara_registro = mascara_registro | (
-                valores.notna()
-                & valores.astype(str).str.strip().ne("")
-                & valores.astype(str).str.lower().ne("nan")
-            )
-
-    salida = salida.loc[mascara_registro].copy()
-
-    if "Vencimiento" not in salida.columns:
-        salida["Vencimiento"] = pd.NaT
-
-    salida["Vencimiento"] = salida["Vencimiento"].apply(convertir_fecha)
-
-    def calcular_vigencia(fecha):
-        if pd.isna(fecha):
-            return "Sin vencimiento", pd.NA
-
-        dias = int((fecha.normalize() - HOY).days)
-
-        if dias < 0:
-            return "Vencida", dias
-        if dias <= 30:
-            return "Por vencer", dias
-        return "Vigente", dias
-
-    resultados = salida["Vencimiento"].apply(calcular_vigencia)
-    salida["Estado"] = resultados.apply(lambda resultado: resultado[0])
-    salida["Dias_Para_Vencer"] = pd.array(
-        resultados.apply(lambda resultado: resultado[1]),
-        dtype="Int64",
-    )
-
-    return salida.reset_index(drop=True)
-
-
-def marcar_vencimientos(df, columna_fecha="Fecha_Compromiso"):
-    salida = df.copy()
-    if columna_fecha not in salida.columns:
-        return salida
-    salida[columna_fecha] = salida[columna_fecha].apply(convertir_fecha)
-    if "Estado" not in salida.columns:
-        salida["Estado"] = "Pendiente"
-    cerrada = salida["Estado"].fillna("").astype(str).str.lower().str.contains("cerr|realiz|cumpl", regex=True)
-    vencida = salida[columna_fecha].notna() & (salida[columna_fecha] < HOY) & (~cerrada)
-    salida.loc[vencida, "Estado"] = "Vencida"
     return salida
 
 
-def buscar_archivo_excel():
-    """Busca la base Excel dentro de la misma carpeta de la aplicación."""
-    # Primero revisa los nombres definidos, en el orden de prioridad indicado.
-    for archivo in ARCHIVOS_EXCEL_POSIBLES:
-        ruta = ruta_app(archivo)
-        if os.path.isfile(ruta):
-            return ruta
-
-    # Como respaldo, detecta cualquier Excel compatible ubicado junto al código.
-    candidatos = []
-    for ruta in glob.glob(ruta_app("*.xlsx")):
-        nombre_archivo = os.path.basename(ruta)
-        if nombre_archivo.startswith("~$"):
-            continue
-        nombre = normalizar_texto(nombre_archivo)
-        if any(clave in nombre for clave in ["base_datos_sgs", "sgs", "sso", "seguridad", "preventiva"]):
-            candidatos.append(ruta)
-
-    # Prefiere la planilla modificada más recientemente cuando existen varias.
-    if candidatos:
-        return max(candidatos, key=os.path.getmtime)
-    return None
-
-
-def construir_url_google_sheet(nombre_pestana):
-    """Construye una URL CSV usando el nombre visible de una pestaña."""
-    nombre_codificado = quote(str(nombre_pestana), safe="")
-    return (
-        f"https://docs.google.com/spreadsheets/d/{GOOGLE_SHEET_ID}/gviz/tq"
-        f"?tqx=out:csv&sheet={nombre_codificado}"
-    )
-
-
-def construir_url_google_sheet_gid(gid):
-    """Construye una URL CSV usando el identificador estable de la pestaña."""
-    return (
-        f"https://docs.google.com/spreadsheets/d/{GOOGLE_SHEET_ID}/gviz/tq"
-        f"?tqx=out:csv&gid={quote(str(gid), safe='')}"
-    )
-
-
-def construir_url_exportacion_gid(gid):
-    """URL oficial de exportación CSV para una pestaña identificada por GID."""
-    return (
-        f"https://docs.google.com/spreadsheets/d/{GOOGLE_SHEET_ID}/export"
-        f"?format=csv&gid={quote(str(gid), safe='')}"
-    )
-
-
-def descargar_csv_google(url, header=0):
-    """
-    Descarga un CSV de Google Sheets y detecta respuestas de inicio de sesión.
-
-    El navegador puede abrir una planilla privada porque el usuario tiene una
-    sesión de Google activa. Streamlit, pandas y requests no reciben esa sesión,
-    por lo que la hoja debe estar compartida como lector mediante enlace o debe
-    utilizarse autenticación con una cuenta de servicio.
-    """
-    respuesta = requests.get(
-        url,
-        timeout=30,
-        allow_redirects=True,
-        headers={
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 Chrome/124 Safari/537.36"
-            )
-        },
-    )
-    respuesta.raise_for_status()
-
-    texto = respuesta.content.decode("utf-8-sig", errors="replace")
-    inicio = texto.lstrip().lower()[:1500]
-    url_final = respuesta.url.lower()
-
-    respuesta_privada = (
-        "accounts.google.com" in url_final
-        or "serviceLogin".lower() in inicio
-        or "sign in" in inicio
-        or "iniciar sesión" in inicio
-        or inicio.startswith("<!doctype html")
-        or inicio.startswith("<html")
-    )
-
-    if respuesta_privada:
-        raise PermissionError(
-            "Google devolvió una página de inicio de sesión en lugar del CSV. "
-            "La planilla no está disponible para lectura anónima."
-        )
-
-    return pd.read_csv(io.StringIO(texto), header=header)
-
-
-@st.cache_data(ttl=60, show_spinner=False)
-def descargar_libro_google_xlsx(sheet_id):
-    """Descarga el Google Sheet completo como XLSX para usarlo como respaldo."""
-    if not sheet_id:
-        return b""
-
-    url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=xlsx"
-    respuesta = requests.get(
-        url,
-        timeout=35,
-        allow_redirects=True,
-        headers={
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 Chrome/124 Safari/537.36"
-            )
-        },
-    )
-    respuesta.raise_for_status()
-
-    contenido = respuesta.content
-    inicio = contenido[:1500].decode("utf-8", errors="ignore").lstrip().lower()
-    tipo = respuesta.headers.get("content-type", "").lower()
-
-    if (
-        "accounts.google.com" in respuesta.url.lower()
-        or "text/html" in tipo
-        or inicio.startswith("<!doctype html")
-        or inicio.startswith("<html")
-        or "sign in" in inicio
-        or "iniciar sesión" in inicio
-    ):
-        raise PermissionError(
-            "Google devolvió una página de acceso en lugar del archivo XLSX. "
-            "La planilla debe estar compartida como lector mediante enlace."
-        )
-
-    if not contenido.startswith(b"PK"):
-        raise ValueError("Google no devolvió un archivo XLSX válido.")
-
-    return contenido
-
-
-def _dataframe_con_registros(df):
-    """Valida que la respuesta contenga filas útiles y no solo encabezados vacíos."""
-    if df is None or len(df.columns) == 0:
-        return False
-
-    if df.empty:
-        return False
-
-    prueba = df.copy()
-    prueba = prueba.replace(r"^\s*$", pd.NA, regex=True)
-    prueba = prueba.dropna(how="all")
-    return not prueba.empty
-
-
-def leer_hoja_desde_google(nombres_hoja, columnas_esperadas=None):
-    """
-    Lee una pestaña de Google Sheets mediante dos métodos:
-
-    1. CSV GViz utilizando el nombre visible de la pestaña.
-    2. Exportación XLSX del libro completo y lectura local de la pestaña.
-
-    El segundo método evita que módulos como Reportabilidad queden vacíos
-    cuando pandas no logra abrir directamente la URL CSV de Google.
-    """
-    if not USAR_GOOGLE_SHEETS or not GOOGLE_SHEET_ID:
-        return None
-
-    errores = []
-    esperadas = {
-        normalizar_texto(columna)
-        for columna in (columnas_esperadas or [])
-    }
-
-    # Método 1: CSV por nombre de pestaña, descargado con requests.
-    for nombre_pestana in nombres_hoja:
-        url = construir_url_google_sheet(nombre_pestana)
-
-        try:
-            df = descargar_csv_google(url, header=0)
-            df = df.dropna(how="all").reset_index(drop=True)
-
-            if not _dataframe_con_registros(df):
-                errores.append(f"{nombre_pestana}: respuesta CSV sin registros")
-                continue
-
-            if esperadas:
-                columnas_recibidas = {
-                    normalizar_texto(columna)
-                    for columna in df.columns
-                }
-                coincidencias = len(esperadas.intersection(columnas_recibidas))
-                if coincidencias < min(3, len(esperadas)):
-                    errores.append(
-                        f"{nombre_pestana}: encabezados no reconocidos "
-                        f"({coincidencias} coincidencias)"
-                    )
-                    continue
-
-            print(
-                f"[SSO] Pestaña '{nombre_pestana}' leída mediante CSV GViz. "
-                f"Registros: {len(df)}"
-            )
-            return df
-
-        except Exception as error:
-            errores.append(
-                f"{nombre_pestana}: {type(error).__name__}: {error}"
-            )
-
-    # Método 2: descarga del libro completo como XLSX.
-    try:
-        contenido = descargar_libro_google_xlsx(GOOGLE_SHEET_ID)
-        excel = pd.ExcelFile(io.BytesIO(contenido))
-        hojas = {normalizar_texto(h): h for h in excel.sheet_names}
-
-        for nombre_pestana in nombres_hoja:
-            clave = normalizar_texto(nombre_pestana)
-            if clave not in hojas:
-                continue
-
-            df = pd.read_excel(
-                io.BytesIO(contenido),
-                sheet_name=hojas[clave],
-            )
-            df = df.dropna(how="all").reset_index(drop=True)
-
-            if _dataframe_con_registros(df):
-                print(
-                    f"[SSO] Pestaña '{hojas[clave]}' leída desde la "
-                    f"exportación XLSX. Registros: {len(df)}"
-                )
-                return df
-
-        errores.append("Exportación XLSX: no se encontró una pestaña compatible")
-
-    except Exception as error:
-        errores.append(f"Exportación XLSX: {type(error).__name__}: {error}")
-
-    print(
-        "[SSO] No fue posible leer la pestaña solicitada desde Google Sheets: "
-        + " | ".join(errores[-5:])
-    )
-    return None
-
-
-
-
-MESES_CORTOS = [
-    "ENE", "FEB", "MAR", "ABR", "MAY", "JUN",
-    "JUL", "AGO", "SEP", "OCT", "NOV", "DIC",
-]
-
-# =========================================================
-# PERIODO OFICIAL PARA EL MÓDULO CUMPLIMIENTOS SSO
-# =========================================================
-# El usuario puede consultar el acumulado oficial de enero a julio de 2026
-# o revisar el año completo, incluyendo las metas y resultados de ENE a DIC.
-ANIO_CUMPLIMIENTOS = 2026
-MES_CORTE_CUMPLIMIENTOS = 7
-MESES_CUMPLIMIENTOS = MESES_CORTOS[:MES_CORTE_CUMPLIMIENTOS]
-PERIODO_CUMPLIMIENTOS = "Enero a julio de 2026"
-PERIODO_ANUAL_CUMPLIMIENTOS = "Año completo 2026"
-
-
-def _es_texto_valido(valor):
-    if pd.isna(valor):
-        return False
-    texto = str(valor).strip()
-    return texto != "" and texto.lower() not in {"nan", "none", "nat"}
-
-
-def _a_numero_cumplimiento(valor):
-    if not _es_texto_valido(valor):
-        return 0.0
-    if isinstance(valor, (int, float)):
-        return float(valor)
-    texto = str(valor).strip().replace("%", "").replace(" ", "")
-    texto = texto.replace(".", "").replace(",", ".")
-    try:
-        return float(texto)
-    except Exception:
-        return 0.0
-
-
-def normalizar_hoja_cumplimientos(df_raw):
-    """
-    Convierte la pestaña visual "Cumplimientos SSO" en una tabla utilizable.
-
-    Admite dos formatos:
-    1) La matriz visual del Excel original, con nombres combinados, encabezados
-       ENE/RE repetidos y filas Total Act., Total Realizadas y % Cumplimiento.
-    2) Una tabla normalizada con columnas Observador, Actividad, ENE, RE_ENE, etc.
-    """
-    columnas_salida = [
-        "Observador", "Actividad",
-        *[col for mes in MESES_CORTOS for col in (mes, f"RE_{mes}")],
-    ]
-
-    if df_raw is None or df_raw.empty:
-        return pd.DataFrame(columns=columnas_salida)
-
-    raw = df_raw.copy()
-    raw = raw.dropna(how="all").reset_index(drop=True)
-
-    # Caso 1: hoja ya normalizada.
-    claves = {normalizar_texto(c): c for c in raw.columns}
-    if "observador" in claves and "actividad" in claves:
-        renombrar = {
-            claves["observador"]: "Observador",
-            claves["actividad"]: "Actividad",
-        }
-        for mes in MESES_CORTOS:
-            posibles_meta = [normalizar_texto(mes), normalizar_texto(mes.lower())]
-            posibles_real = [
-                normalizar_texto(f"RE_{mes}"),
-                normalizar_texto(f"RE {mes}"),
-                normalizar_texto(f"REAL_{mes}"),
-                normalizar_texto(f"REAL {mes}"),
-            ]
-            for clave in posibles_meta:
-                if clave in claves:
-                    renombrar[claves[clave]] = mes
-                    break
-            for clave in posibles_real:
-                if clave in claves:
-                    renombrar[claves[clave]] = f"RE_{mes}"
-                    break
-
-        salida = raw.rename(columns=renombrar)
-        salida = asegurar_columnas(salida, columnas_salida)[columnas_salida]
-        for col in columnas_salida[2:]:
-            salida[col] = salida[col].apply(_a_numero_cumplimiento)
-        salida["Observador"] = salida["Observador"].astype(str).str.strip()
-        salida["Actividad"] = salida["Actividad"].astype(str).str.strip()
-        salida = salida[
-            salida["Observador"].ne("")
-            & salida["Actividad"].ne("")
-            & ~salida["Actividad"].apply(normalizar_texto).str.contains(
-                r"^total|cumplimiento", regex=True, na=False
-            )
-        ]
-        return salida.reset_index(drop=True)
-
-    # Caso 2: matriz visual. Ubica la columna de actividad por contenido.
-    puntajes = {}
-    patrones_actividad = (
-        "control operacional", "ops", "inspecciones", "check list",
-        "observaciones", "bapp",
-    )
-    for col in raw.columns:
-        serie = raw[col].astype(str).str.lower()
-        puntajes[col] = int(sum(serie.str.contains(p, regex=False, na=False).sum() for p in patrones_actividad))
-
-    if not puntajes or max(puntajes.values()) == 0:
-        return pd.DataFrame(columns=columnas_salida)
-
-    col_actividad = max(puntajes, key=puntajes.get)
-    posicion_actividad = list(raw.columns).index(col_actividad)
-    columnas_izquierda = list(raw.columns)[:posicion_actividad]
-    columnas_datos = list(raw.columns)[posicion_actividad + 1: posicion_actividad + 25]
-
-    registros = []
-    observador_actual = ""
-
-    for _, fila in raw.iterrows():
-        # Recupera el nombre del observador desde las celdas combinadas.
-        candidatos = []
-        for col in columnas_izquierda:
-            valor = fila.get(col, "")
-            if not _es_texto_valido(valor):
-                continue
-            texto = str(valor).strip()
-            clave = normalizar_texto(texto)
-            if clave.isdigit() or clave in {"actividades", "actividad"}:
-                continue
-            if any(token in clave for token in ["seguimiento", "cumplimiento", "total"]):
-                continue
-            # Nombres de personas normalmente contienen al menos un espacio.
-            if any(ch.isalpha() for ch in texto) and len(texto) >= 4:
-                candidatos.append(texto)
-        if candidatos:
-            observador_actual = max(candidatos, key=len)
-
-        actividad = fila.get(col_actividad, "")
-        if not _es_texto_valido(actividad):
-            continue
-
-        actividad = str(actividad).strip()
-        clave_actividad = normalizar_texto(actividad)
-
-        if (
-            not observador_actual
-            or clave_actividad in {"actividad", "actividades", "ene", "re"}
-            or clave_actividad.startswith("total")
-            or "cumplimiento" in clave_actividad
-        ):
-            continue
-
-        es_actividad = any(
-            patron in clave_actividad
-            for patron in [
-                "control_operacional", "ops", "inspeccion", "check_list",
-                "observacion", "bapp",
-            ]
-        )
-        if not es_actividad:
-            continue
-
-        valores = [_a_numero_cumplimiento(fila.get(col, 0)) for col in columnas_datos]
-        valores += [0.0] * (24 - len(valores))
-
-        registro = {
-            "Observador": observador_actual,
-            "Actividad": actividad,
-        }
-        for i, mes in enumerate(MESES_CORTOS):
-            registro[mes] = valores[i * 2]
-            registro[f"RE_{mes}"] = valores[i * 2 + 1]
-        registros.append(registro)
-
-    salida = pd.DataFrame(registros, columns=columnas_salida)
-    if salida.empty:
-        return salida
-
-    salida["Observador"] = salida["Observador"].astype(str).str.strip()
-    salida["Actividad"] = salida["Actividad"].astype(str).str.strip()
-    return salida.reset_index(drop=True)
-
-
-def leer_cumplimientos_desde_google(nombres_hoja):
-    """
-    Lee la matriz de Cumplimientos SSO desde Google Sheets.
-
-    Prioridad:
-    1. Exportación CSV por GID.
-    2. Consulta GViz por GID.
-    3. Consulta GViz por nombres alternativos.
-    """
-    if not USAR_GOOGLE_SHEETS or not GOOGLE_SHEET_ID:
-        return None
-
-    intentos = []
-
-    if CUMPLIMIENTOS_SSO_GID:
-        intentos.extend([
-            ("Exportación CSV por GID", construir_url_exportacion_gid(CUMPLIMIENTOS_SSO_GID)),
-            ("GViz por GID", construir_url_google_sheet_gid(CUMPLIMIENTOS_SSO_GID)),
-        ])
-
-    intentos.extend(
-        (f"GViz por nombre: {nombre}", construir_url_google_sheet(nombre))
-        for nombre in nombres_hoja
-    )
-
-    errores = []
-
-    for metodo, url in intentos:
-        try:
-            raw = descargar_csv_google(url, header=None)
-            normalizado = normalizar_hoja_cumplimientos(raw)
-
-            if normalizado is not None and not normalizado.empty:
-                print(
-                    f"[SSO] Cumplimientos SSO leído correctamente mediante {metodo}. "
-                    f"Registros: {len(normalizado)}"
-                )
-                st.session_state["error_cumplimientos_google"] = ""
-                return normalizado
-
-            errores.append(f"{metodo}: el CSV fue leído, pero no se reconoció la matriz.")
-
-        except Exception as error:
-            errores.append(f"{metodo}: {type(error).__name__}: {error}")
-            print(
-                f"[SSO] No fue posible leer Cumplimientos SSO mediante {metodo} "
-                f"desde {url}: {error}"
-            )
-
-    st.session_state["error_cumplimientos_google"] = " | ".join(errores[-3:])
-    return None
-
-
-def leer_cumplimientos_desde_excel(archivo_excel, nombres_hoja):
-    if not archivo_excel:
-        return None
-    try:
-        excel = pd.ExcelFile(archivo_excel)
-        hojas = {normalizar_texto(h): h for h in excel.sheet_names}
-        for nombre in nombres_hoja:
-            clave = normalizar_texto(nombre)
-            if clave in hojas:
-                raw = pd.read_excel(archivo_excel, sheet_name=hojas[clave], header=None)
-                normalizado = normalizar_hoja_cumplimientos(raw)
-                if normalizado is not None and not normalizado.empty:
-                    return normalizado
-    except Exception:
-        return None
-    return None
-
-
-def preparar_reportabilidad(df):
-    """Normaliza, limpia y valida los registros de la pestaña Reportabilidad."""
-    columnas = [
-        "Fecha",
-        "Área",
-        "Tipo_Evento",
-        "Descripcion",
-        "Accion_Inmediata",
-        "Responsable",
-        "Estado",
-        "Evidencia",
-    ]
-
-    if df is None:
-        return pd.DataFrame(columns=columnas)
-
-    salida = normalizar_columnas_dataframe(df.copy())
-
-    # Compatibilidad con versiones anteriores de la hoja, donde la última
-    # columna se llamaba Ruta_Link. Su contenido ahora se presenta como Evidencia.
-    if "Evidencia" not in salida.columns and "Ruta_Link" in salida.columns:
-        salida["Evidencia"] = salida["Ruta_Link"]
-
-    # Conserva exclusivamente la estructura vigente de Reportabilidad.
-    salida = asegurar_columnas(salida, columnas)[columnas]
-
-    # Elimina filas vacías que suelen quedar formateadas hacia abajo en Sheets.
-    claves_registro = [
-        "Fecha",
-        "Área",
-        "Tipo_Evento",
-        "Descripcion",
-        "Responsable",
-        "Estado",
-    ]
-    mascara = pd.Series(False, index=salida.index)
-    for columna in claves_registro:
-        valores = salida[columna]
-        mascara = mascara | (
-            valores.notna()
-            & valores.astype(str).str.strip().ne("")
-            & valores.astype(str).str.lower().ne("nan")
-        )
-
-    salida = salida.loc[mascara].copy()
-
-    if salida.empty:
-        return pd.DataFrame(columns=columnas)
-
-    salida["Fecha"] = salida["Fecha"].apply(convertir_fecha)
-
-    for columna in [
-        "Área",
-        "Tipo_Evento",
-        "Descripcion",
-        "Accion_Inmediata",
-        "Responsable",
-        "Estado",
-        "Evidencia",
-    ]:
-        salida[columna] = salida[columna].fillna("").astype(str).str.strip()
-
-    salida = normalizar_estados(salida)
-    salida = preparar_periodo(salida)
-    return salida.reset_index(drop=True)
-
-def crear_datos_ejemplo(nombre_hoja):
-    if nombre_hoja == "Cumplimientos_SSO":
-        filas = []
-        # Respaldo completo del módulo: se consideran los 6 colaboradores
-        # definidos para el seguimiento SSO. Estos registros solo se utilizan
-        # cuando no es posible leer la hoja desde Google Sheets ni desde Excel.
-        ejemplo = {
-            "Juan Fonseca Cuevas": [
-                ("Control operacional CMPC", 2),
-                ("Control operacional SAIVAM", 4),
-                ("OPS de Seguridad CMPC", 8),
-                ("Inspecciones/Check List de Seguridad SAIVAM", 4),
-                ("Observaciones de Seguridad SAIVAM", 4),
-            ],
-            "José Acuña Ortiz": [
-                ("Control operacional CMPC", 2),
-                ("Control operacional SAIVAM", 4),
-                ("OPS de Seguridad CMPC", 8),
-                ("Inspecciones/Check List de Seguridad SAIVAM", 4),
-                ("Observaciones de Seguridad SAIVAM", 4),
-            ],
-            "Daniel Carrasco G.": [
-                ("Control operacional CMPC", 2),
-                ("Control operacional SAIVAM", 4),
-                ("OPS de Seguridad CMPC", 8),
-                ("Inspecciones/Check List de Seguridad SAIVAM", 4),
-                ("Observaciones de Seguridad SAIVAM", 4),
-            ],
-            "María Araya Parra": [
-                ("Control operacional CMPC", 2),
-                ("Control operacional SAIVAM", 4),
-                ("OPS de Seguridad CMPC", 8),
-                ("Inspecciones/Check List de Seguridad SAIVAM", 4),
-                ("Observaciones de Seguridad SAIVAM", 4),
-            ],
-            "Ricardo Grez": [
-                ("OPS de Seguridad CMPC", 8),
-            ],
-            "Esteban Cáceres": [
-                ("OPS BAPP", 4),
-            ],
-        }
-        for observador, actividades in ejemplo.items():
-            for actividad, meta in actividades:
-                fila = {"Observador": observador, "Actividad": actividad}
-                for mes in MESES_CORTOS:
-                    fila[mes] = meta
-                    fila[f"RE_{mes}"] = meta if mes in MESES_CORTOS[:7] else 0
-                filas.append(fila)
-        return pd.DataFrame(filas)
-    if nombre_hoja == "OPS":
-        return pd.DataFrame([
-            {
-                "Fecha": "05/07/2026",
-                "Área": "Aserradero",
-                "Trabajador": "Ejemplo Trabajador",
-                "Supervisor": "Supervisor Turno",
-                "Actividad": "Limpieza operacional",
-                "Tipo_Observacion": "Conducta segura",
-                "Conducta_Segura": "Uso correcto de EPP y comunicación con el equipo.",
-                "Conducta_Riesgo": "",
-                "Medida_Correctiva": "Mantener estándar observado.",
-                "Responsable": "Supervisor",
-                "Fecha_Compromiso": "10/07/2026",
-                "Estado": "Cerrada",
-                "Observacion": "Registro de ejemplo.",
-            },
-            {
-                "Fecha": "08/07/2026",
-                "Área": "Drymill",
-                "Trabajador": "Ejemplo Trabajador 2",
-                "Supervisor": "Supervisor Turno",
-                "Actividad": "Retiro de material",
-                "Tipo_Observacion": "Conducta de riesgo",
-                "Conducta_Segura": "",
-                "Conducta_Riesgo": "Ingreso al área sin verificar segregación.",
-                "Medida_Correctiva": "Reforzar segregación y control de ingreso.",
-                "Responsable": "Líder de área",
-                "Fecha_Compromiso": "12/07/2026",
-                "Estado": "Pendiente",
-                "Observacion": "Registro de ejemplo.",
-            },
-        ])
-
-    if nombre_hoja == "Incidentes":
-        return pd.DataFrame([
-            {
-                "Fecha": "03/07/2026",
-                "Área": "Planta Térmica",
-                "Tipo_Evento": "Hallazgo",
-                "Gravedad": "Media",
-                "Descripcion": "Condición subestándar detectada en punto de tránsito.",
-                "Accion_Inmediata": "Se informa a supervisor y se controla el área.",
-                "Responsable": "Supervisor",
-                "Estado": "En proceso",
-                "Evidencia": "Registro de ejemplo.",
-            },
-            {
-                "Fecha": "06/07/2026",
-                "Área": "Aserradero",
-                "Tipo_Evento": "Cuasi accidente",
-                "Gravedad": "Alta",
-                "Descripcion": "Interacción entre peatón y equipo móvil.",
-                "Accion_Inmediata": "Detención de tarea y charla de refuerzo.",
-                "Responsable": "Prevención",
-                "Estado": "Pendiente",
-                "Evidencia": "Registro de ejemplo.",
-            },
-        ])
-
-    if nombre_hoja == "Inspecciones":
-        return pd.DataFrame([
-            {
-                "Fecha": "04/07/2026",
-                "Área": "Mantención",
-                "Tipo_Inspeccion": "Bloqueo de energías",
-                "Resultado": "Cumple",
-                "Hallazgos": "Procedimiento aplicado correctamente.",
-                "Responsable": "Supervisor Mantención",
-                "Fecha_Compromiso": "",
-                "Estado": "Cerrada",
-                "Observacion": "Registro de ejemplo.",
-            },
-            {
-                "Fecha": "07/07/2026",
-                "Área": "Descortezado",
-                "Tipo_Inspeccion": "Orden y aseo",
-                "Resultado": "No cumple",
-                "Hallazgos": "Material acumulado en zona operacional.",
-                "Responsable": "Líder área",
-                "Fecha_Compromiso": "11/07/2026",
-                "Estado": "Pendiente",
-                "Observacion": "Registro de ejemplo.",
-            },
-        ])
-
-    if nombre_hoja == "Plan_Accion":
-        return pd.DataFrame([
-            {
-                "Fecha": "03/07/2026",
-                "Origen": "Inspección",
-                "Área": "Descortezado",
-                "Hallazgo": "Material acumulado en zona de trabajo.",
-                "Accion_Correctiva": "Realizar limpieza y reforzar estándar de orden.",
-                "Responsable": "Supervisor Turno",
-                "Fecha_Compromiso": "11/07/2026",
-                "Estado": "Pendiente",
-                "Evidencia": "",
-                "Observacion": "Registro de ejemplo.",
-            },
-            {
-                "Fecha": "01/07/2026",
-                "Origen": "OPS",
-                "Área": "Aserradero",
-                "Hallazgo": "Falta de señalización temporal.",
-                "Accion_Correctiva": "Instalar señalética y revisar segregación.",
-                "Responsable": "Prevención",
-                "Fecha_Compromiso": "06/07/2026",
-                "Estado": "Cerrada",
-                "Evidencia": "",
-                "Observacion": "Registro de ejemplo.",
-            },
-        ])
-
-    if nombre_hoja == "Capacitaciones":
-        return pd.DataFrame([
-            {
-                "Fecha": "02/07/2026",
-                "Tema": "Bloqueo de energías",
-                "Tipo": "Capacitación",
-                "Área": "Transversal",
-                "Responsable": "María Araya",
-                "Vencimiento": "31/07/2026",
-                "Estado": "Pendiente",
-                "Observacion": "Registro de ejemplo.",
-                "Evidencia": "",
-            },
-            {
-                "Fecha": "04/08/2026",
-                "Tema": "Protocolo Psicosocial",
-                "Tipo": "Capacitación",
-                "Área": "Transversal",
-                "Responsable": "María Araya",
-                "Vencimiento": "31/08/2026",
-                "Estado": "En proceso",
-                "Observacion": "Registro de ejemplo.",
-                "Evidencia": "",
-            },
-        ])
-
-    if nombre_hoja == "EPP":
-        return pd.DataFrame([
-            {
-                "Fecha": "01/07/2026",
-                "Trabajador": "Ejemplo Trabajador",
-                "Cargo": "Aseador Industrial",
-                "EPP": "Guantes anticorte",
-                "Cantidad": 1,
-                "Proxima_Reposicion": "01/08/2026",
-                "Estado": "Vigente",
-                "Observacion": "Registro de ejemplo.",
-            },
-            {
-                "Fecha": "03/07/2026",
-                "Trabajador": "Ejemplo Trabajador 2",
-                "Cargo": "Operador equipos",
-                "EPP": "Lente de seguridad",
-                "Cantidad": 1,
-                "Proxima_Reposicion": "03/08/2026",
-                "Estado": "Vigente",
-                "Observacion": "Registro de ejemplo.",
-            },
-        ])
-
-    if nombre_hoja == "Protocolos_MINSAL":
-        return pd.DataFrame([
-            {
-                "Fecha": "15/03/2026", "Protocolo": "PREXOR", "Etapa": "Identificación",
-                "Área": "Aserradero", "Actividad": "Evaluación de exposición a ruido",
-                "Expuestos": 14, "Responsable": "María Araya",
-                "Resultado": "Área incorporada al programa", "Fecha_Compromiso": "15/04/2026",
-                "Estado": "Cerrada", "Evidencia": "Drive/MINSAL/PREXOR",
-                "Observacion": "Registro de ejemplo.",
-            },
-            {
-                "Fecha": "10/04/2026", "Protocolo": "TMERT", "Etapa": "Evaluación inicial",
-                "Área": "Drymill", "Actividad": "Aplicación de lista de chequeo",
-                "Expuestos": 10, "Responsable": "María Araya", "Resultado": "Riesgo medio",
-                "Fecha_Compromiso": "15/08/2026", "Estado": "En proceso",
-                "Evidencia": "Drive/MINSAL/TMERT", "Observacion": "Registro de ejemplo.",
-            },
-        ])
-
-    if nombre_hoja == "Certificaciones":
-        return pd.DataFrame([
-            {
-                "Fecha": "10/10/2025",
-                "Categoria": "Equipos",
-                "Subcategoria": "Grúa horquilla",
-                "Nombre_Certificacion": "Certificación Sello Verde",
-                "Entidad_Emisora": "C&S Certificación",
-                "Vencimiento": "10/10/2026",
-                "Estado": "Vigente",
-                "Dias_Para_Vencer": 89,
-                "Ruta_Link": "link",
-            },
-            {
-                "Fecha": "10/10/2025",
-                "Categoria": "Equipos",
-                "Subcategoria": "Barredora hombre a bordo",
-                "Nombre_Certificacion": "Certificación Sello Verde",
-                "Entidad_Emisora": "C&S Certificación",
-                "Vencimiento": "10/10/2026",
-                "Estado": "Vigente",
-                "Dias_Para_Vencer": 89,
-                "Ruta_Link": "link",
-            },
-            {
-                "Fecha": "10/10/2025",
-                "Categoria": "Equipos",
-                "Subcategoria": "Minicargador",
-                "Nombre_Certificacion": "Certificación Sello Verde",
-                "Entidad_Emisora": "C&S Certificación",
-                "Vencimiento": "10/10/2026",
-                "Estado": "Vigente",
-                "Dias_Para_Vencer": 89,
-                "Ruta_Link": "link",
-            },
-            {
-                "Fecha": "10/10/2025",
-                "Categoria": "Equipos",
-                "Subcategoria": "Alzahombre",
-                "Nombre_Certificacion": "Certificación Sello Verde",
-                "Entidad_Emisora": "C&S Certificación",
-                "Vencimiento": "10/10/2026",
-                "Estado": "Vigente",
-                "Dias_Para_Vencer": 89,
-                "Ruta_Link": "link",
-            },
-            {
-                "Fecha": "10/10/2025",
-                "Categoria": "Equipos",
-                "Subcategoria": "Camión",
-                "Nombre_Certificacion": "Certificación Sello Verde",
-                "Entidad_Emisora": "C&S Certificación",
-                "Vencimiento": "10/10/2026",
-                "Estado": "Vigente",
-                "Dias_Para_Vencer": 89,
-                "Ruta_Link": "link",
-            },
-            {
-                "Fecha": "28/10/2025",
-                "Categoria": "Personas",
-                "Subcategoria": "Nibaldo Tobar",
-                "Nombre_Certificacion": "Certificación Corma",
-                "Entidad_Emisora": "ICCEN E.I.R.L",
-                "Vencimiento": "28/10/2026",
-                "Estado": "Vigente",
-                "Dias_Para_Vencer": 107,
-                "Ruta_Link": "link",
-            },
-            {
-                "Fecha": "28/10/2025",
-                "Categoria": "Personas",
-                "Subcategoria": "Diego Cofré",
-                "Nombre_Certificacion": "Certificación Corma",
-                "Entidad_Emisora": "ICCEN E.I.R.L",
-                "Vencimiento": "28/10/2026",
-                "Estado": "Vigente",
-                "Dias_Para_Vencer": 107,
-                "Ruta_Link": "link",
-            },
-            {
-                "Fecha": "28/10/2025",
-                "Categoria": "Personas",
-                "Subcategoria": "Camilo Aguayo",
-                "Nombre_Certificacion": "Certificación Corma",
-                "Entidad_Emisora": "ICCEN E.I.R.L",
-                "Vencimiento": "28/10/2026",
-                "Estado": "Vigente",
-                "Dias_Para_Vencer": 107,
-                "Ruta_Link": "link",
-            },
-            {
-                "Fecha": "08/08/2025",
-                "Categoria": "Empresa",
-                "Subcategoria": "Comité Paritario",
-                "Nombre_Certificacion": "Certificación categoría Oro",
-                "Entidad_Emisora": "Mutual de Seguridad",
-                "Vencimiento": "08/08/2026",
-                "Estado": "Por vencer",
-                "Dias_Para_Vencer": 26,
-                "Ruta_Link": "link",
-            },
-            {
-                "Fecha": "18/06/2026",
-                "Categoria": "Empresa",
-                "Subcategoria": "Sistema de Gestión SSO",
-                "Nombre_Certificacion": "Mutual de Seguridad",
-                "Entidad_Emisora": "Mutual de Seguridad",
-                "Vencimiento": "18/06/2027",
-                "Estado": "Vigente",
-                "Dias_Para_Vencer": 340,
-                "Ruta_Link": "link",
-            },
-        ])
-
-    if nombre_hoja == "Programa_Anual":
-        return pd.DataFrame([
-            {
-                "Mes": "Enero",
-                "Eje_Trabajo": "Capacitaciones",
-                "Actividad": "Capacitación Programa de Seguridad SAIVAM",
-                "Tipo_Actividad": "Capacitación",
-                "Fecha_Programada": "20/01/2026",
-                "Fecha_Realizacion": "20/01/2026",
-                "Responsable": "María Araya",
-                "Estado": "Cerrada",
-                "Evidencia": "Carpeta/PRG_SSO_2026/Enero",
-                "Observacion": "Actividad ejecutada según programa.",
-            },
-            {
-                "Mes": "Agosto",
-                "Eje_Trabajo": "Procedimientos e instructivos",
-                "Actividad": "Revisión de procedimientos críticos",
-                "Tipo_Actividad": "Auditoría",
-                "Fecha_Programada": "18/08/2026",
-                "Fecha_Realizacion": "",
-                "Responsable": "María Araya",
-                "Estado": "Pendiente",
-                "Evidencia": "",
-                "Observacion": "Actividad programada.",
-            },
-        ])
-
-    if nombre_hoja == "Reconocimientos":
-        return pd.DataFrame([
-            {
-                "Fecha": "31/01/2026",
-                "Trabajador": "María Araya P.",
-                "Cargo": "Ingeniera en Prevención de Riesgos",
-                "Motivo": "Gestión SSO 2025",
-                "Periodo": "Enero 2026",
-                "Estado": "Cerrada",
-                "Evidencia": "",
-                "Observacion": "Reconocimiento de seguridad CMPC, 2025.",
-            },
-            {
-                "Fecha": "31/01/2026",
-                "Trabajador": "Pedro Quezada L.",
-                "Cargo": "Aseador Industrial Mantenedor",
-                "Motivo": "Compromiso con la seguridad",
-                "Periodo": "Enero 2026",
-                "Estado": "Cerrada",
-                "Evidencia": "",
-                "Observacion": "Reconocimiento mensual correspondiente a enero de 2026.",
-            },
-            {
-                "Fecha": "28/02/2026",
-                "Trabajador": "Esteban Cáceres J.",
-                "Cargo": "Aseador Industrial y Op. Riego",
-                "Motivo": "Compromiso con la seguridad",
-                "Periodo": "Febrero 2026",
-                "Estado": "Cerrada",
-                "Evidencia": "",
-                "Observacion": "Reconocimiento mensual correspondiente a febrero de 2026.",
-            },
-            {
-                "Fecha": "31/03/2026",
-                "Trabajador": "Héctor Flores F.",
-                "Cargo": "Aseador Industrial Mantenedor",
-                "Motivo": "Compromiso con la seguridad",
-                "Periodo": "Marzo 2026",
-                "Estado": "Cerrada",
-                "Evidencia": "",
-                "Observacion": "Reconocimiento mensual correspondiente a marzo de 2026.",
-            },
-            {
-                "Fecha": "30/04/2026",
-                "Trabajador": "Omar Acevedo S.",
-                "Cargo": "Aseador Industrial y Jardinero",
-                "Motivo": "Compromiso con la seguridad",
-                "Periodo": "Abril 2026",
-                "Estado": "Cerrada",
-                "Evidencia": "",
-                "Observacion": "Reconocimiento mensual correspondiente a abril de 2026.",
-            },
-            {
-                "Fecha": "31/05/2026",
-                "Trabajador": "Pedro Morales C.",
-                "Cargo": "Operador Riego",
-                "Motivo": "Compromiso con la seguridad",
-                "Periodo": "Mayo 2026",
-                "Estado": "Cerrada",
-                "Evidencia": "",
-                "Observacion": "Reconocimiento mensual correspondiente a mayo de 2026.",
-            },
-            {
-                "Fecha": "30/06/2026",
-                "Trabajador": "Manuel Mardones B.",
-                "Cargo": "Aseador Industrial Mantención",
-                "Motivo": "Compromiso con la seguridad",
-                "Periodo": "Junio 2026",
-                "Estado": "Cerrada",
-                "Evidencia": "",
-                "Observacion": "Reconocimiento mensual correspondiente a junio de 2026.",
-            },
-            {
-                "Fecha": "31/07/2026",
-                "Trabajador": "Isaac Melgarejo R.",
-                "Cargo": "Aseador Industrial",
-                "Motivo": "Compromiso con la seguridad",
-                "Periodo": "Julio 2026",
-                "Estado": "Cerrada",
-                "Evidencia": "",
-                "Observacion": "Reconocimiento mensual correspondiente a julio de 2026.",
-            },
-        ])
-
-    if nombre_hoja == "Comite_Paritario":
-        return pd.DataFrame([
-            {
-                "Fecha": "12/06/2026",
-                "Tipo_Reunion": "Reunión ordinaria",
-                "Área": "Aserradero",
-                "Tema": "Revisión de observaciones preventivas",
-                "Acuerdo": "Reforzar rutas peatonales y segregación.",
-                "Responsable": "Supervisor Aserradero",
-                "Fecha_Compromiso": "25/06/2026",
-                "Estado": "Cerrada",
-                "Evidencia": "Carpeta/Comite_Paritario/Junio",
-                "Observacion": "Acuerdo verificado en terreno.",
-            },
-            {
-                "Fecha": "10/07/2026",
-                "Tipo_Reunion": "Reunión ordinaria",
-                "Área": "Mantención",
-                "Tema": "Seguimiento de acciones correctivas",
-                "Acuerdo": "Cerrar acciones vencidas y adjuntar evidencia.",
-                "Responsable": "María Araya",
-                "Fecha_Compromiso": "18/07/2026",
-                "Estado": "En proceso",
-                "Evidencia": "",
-                "Observacion": "Seguimiento programado.",
-            },
-        ])
-
-    if nombre_hoja == "Trabajos_Criticos":
-        return pd.DataFrame([
-            {
-                "Fecha": "06/07/2026",
-                "Área": "Mantención",
-                "Tipo_Trabajo": "Bloqueo de energías",
-                "Actividad": "Intervención de equipo detenido",
-                "Responsable": "Supervisor Mantención",
-                "Permiso": "Sí",
-                "Estado": "Cerrada",
-                "Observacion": "Registro de ejemplo.",
-            },
-            {
-                "Fecha": "08/07/2026",
-                "Área": "Planta Térmica",
-                "Tipo_Trabajo": "Espacio confinado",
-                "Actividad": "Limpieza interior",
-                "Responsable": "Supervisor Turno",
-                "Permiso": "Sí",
-                "Estado": "En proceso",
-                "Observacion": "Registro de ejemplo.",
-            },
-        ])
-
-    if nombre_hoja == "Documentos":
-        return pd.DataFrame([
-            {
-                "Tipo_Documento": "Procedimiento",
-                "Nombre_Documento": "Procedimiento de bloqueo de energías",
-                "Version": "1.0",
-                "Fecha": "01/07/2026",
-                "Vencimiento": "01/07/2027",
-                "Estado": "Vigente",
-                "Ruta_Link": "",
-                "Observacion": "Registro de ejemplo.",
-            },
-            {
-                "Tipo_Documento": "Matriz",
-                "Nombre_Documento": "Matriz de riesgos operacionales",
-                "Version": "1.0",
-                "Fecha": "01/07/2026",
-                "Vencimiento": "01/07/2027",
-                "Estado": "Vigente",
-                "Ruta_Link": "",
-                "Observacion": "Registro de ejemplo.",
-            },
-        ])
-
-    if nombre_hoja == "Configuracion":
-        return pd.DataFrame([
-            {"Parametro": "Inicio_Sin_Accidentes", "Valor": FECHA_INICIO_SIN_ACCIDENTES_DEFAULT},
-            {"Parametro": "Meta_OPS_Mensual", "Valor": 30},
-            {"Parametro": "Meta_Inspecciones_Mensual", "Valor": 12},
-            {"Parametro": "Meta_Capacitaciones_Mensual", "Valor": 4},
-        ])
-
-    return pd.DataFrame(columns=SHEETS[nombre_hoja]["columnas"])
-
-
-def leer_hoja_desde_excel(archivo_excel, nombres_hoja):
-    if not archivo_excel:
-        return None
-    try:
-        excel = pd.ExcelFile(archivo_excel)
-        hojas_disponibles = {normalizar_texto(h): h for h in excel.sheet_names}
-        for nombre in nombres_hoja:
-            clave = normalizar_texto(nombre)
-            if clave in hojas_disponibles:
-                return pd.read_excel(archivo_excel, sheet_name=hojas_disponibles[clave])
-    except Exception:
-        return None
-    return None
-
-
-@st.cache_data(ttl=60)
-def cargar_datos():
-    """
-    Carga todas las pestañas desde un único Google Sheet.
-
-    Orden de prioridad:
-    1. Google Sheets.
-    2. Excel local como respaldo.
-    3. Datos de ejemplo si no existe ninguna de las fuentes anteriores.
-    """
-    archivo_excel = buscar_archivo_excel()
-    datos = {}
-    fuentes = {}
-
-    for nombre_hoja, config in SHEETS.items():
-        if nombre_hoja == "Incidentes":
-            df = leer_hoja_desde_google(
-                config["nombres"],
-                config["columnas"],
-            )
-            fuente = "Google Sheets"
-
-            if df is None or df.empty:
-                df = leer_hoja_desde_excel(
-                    archivo_excel,
-                    config["nombres"],
-                )
-                fuente = "Excel local"
-
-            if df is None or df.empty:
-                # Reportabilidad no utiliza registros ficticios. De esta forma
-                # los indicadores nunca muestran información de ejemplo como si
-                # correspondiera a la operación real.
-                df = pd.DataFrame(columns=config["columnas"])
-                fuente = "Sin datos"
-
-            df = preparar_reportabilidad(df)
-            datos[nombre_hoja] = df
-            fuentes[nombre_hoja] = fuente
-            continue
-
-        if nombre_hoja == "Cumplimientos_SSO":
-            df = leer_cumplimientos_desde_google(config["nombres"])
-            fuente = "Google Sheets"
-
-            if df is None or df.empty:
-                df = leer_cumplimientos_desde_excel(
-                    archivo_excel,
-                    config["nombres"],
-                )
-                fuente = "Excel local"
-
-            if df is None or df.empty:
-                # No se usan datos ficticios en Cumplimientos SSO. Si Google
-                # Sheets y el Excel local no responden, el módulo queda vacío
-                # y muestra una advertencia, evitando porcentajes incorrectos.
-                df = pd.DataFrame(columns=config["columnas"])
-                fuente = "Sin datos"
-
-            df = normalizar_hoja_cumplimientos(df)
-            df = asegurar_columnas(df, config["columnas"])
-            datos[nombre_hoja] = df
-            fuentes[nombre_hoja] = fuente
-            continue
-
-        df = leer_hoja_desde_google(
-            config["nombres"],
-            config["columnas"],
-        )
-        fuente = "Google Sheets"
-
-        if df is None or df.empty:
-            df = leer_hoja_desde_excel(
-                archivo_excel,
-                config["nombres"],
-            )
-            fuente = "Excel local"
-
-        if df is None or df.empty:
-            df = crear_datos_ejemplo(nombre_hoja)
-            fuente = "Datos de ejemplo"
-
-        # La pestaña PRG_SSO_2026 se procesa por separado para conservar el
-        # campo Mes y respetar el Estado informado directamente en Google Sheets.
-        if nombre_hoja == "Programa_Anual":
-            df = preparar_programa_anual(df)
-            datos[nombre_hoja] = df
-            fuentes[nombre_hoja] = fuente
-            continue
-
-        df = normalizar_columnas_dataframe(df)
-        df = asegurar_columnas(df, config["columnas"])
-        df = preparar_fechas(df)
-
-        if nombre_hoja != "Configuracion":
-            df = preparar_periodo(df)
-
-        if "Estado" in df.columns:
-            df = normalizar_estados(df)
-
-        if nombre_hoja in [
-            "OPS",
-            "Inspecciones",
-            "Plan_Accion",
-            "Comite_Paritario",
-            "Protocolos_MINSAL",
-        ]:
-            df = marcar_vencimientos(
-                df,
-                "Fecha_Compromiso",
-            )
-
-        # En Capacitaciones el estado se conserva tal como fue informado en
-        # Google Sheets; no se recalcula automáticamente según Vencimiento.
-        if nombre_hoja == "Certificaciones":
-            df = preparar_certificaciones(df)
-
-        datos[nombre_hoja] = df
-        fuentes[nombre_hoja] = fuente
-
-    return datos, archivo_excel, fuentes
-
-
-def valor_config(configuracion, parametro, default=""):
-    if configuracion is None or configuracion.empty:
-        return default
-    if "Parametro" not in configuracion.columns or "Valor" not in configuracion.columns:
-        return default
-    buscar = normalizar_texto(parametro)
-    aux = configuracion.copy()
-    aux["_param"] = aux["Parametro"].apply(normalizar_texto)
-    fila = aux[aux["_param"] == buscar]
-    if fila.empty:
-        return default
-    return fila.iloc[0]["Valor"]
-
-
-def dias_sin_accidentes(configuracion, incidentes):
-    fecha_inicio = convertir_fecha(valor_config(configuracion, "Inicio_Sin_Accidentes", FECHA_INICIO_SIN_ACCIDENTES_DEFAULT))
-
-    if incidentes is not None and not incidentes.empty and "Tipo_Evento" in incidentes.columns:
-        eventos = incidentes.copy()
-        eventos["Fecha"] = eventos["Fecha"].apply(convertir_fecha)
-        eventos["_tipo"] = eventos["Tipo_Evento"].apply(normalizar_texto)
-        accidentes = eventos[eventos["_tipo"].str.contains("accidente", na=False)]
-        accidentes = accidentes[~accidentes["_tipo"].str.contains("cuasi", na=False)]
-        if not accidentes.empty:
-            ultima_fecha = accidentes["Fecha"].max()
-            if pd.notna(ultima_fecha):
-                fecha_inicio = max(fecha_inicio, ultima_fecha)
-
-    if pd.isna(fecha_inicio):
-        fecha_inicio = convertir_fecha(FECHA_INICIO_SIN_ACCIDENTES_DEFAULT)
-
-    return max(0, int((HOY - fecha_inicio.normalize()).days)), fecha_inicio
-
-
-def aplicar_filtros(df, filtro_area, filtro_anio, filtro_mes):
-    if df is None or df.empty:
-        return df
+def aplicar_filtro_periodo(df, filtro_equipo, filtro_anio, filtro_mes):
     salida = df.copy()
-    if filtro_area != "Todas las áreas" and "Área" in salida.columns:
-        salida = salida[salida["Área"].astype(str) == filtro_area]
+
+    if filtro_equipo != "Todos los equipos" and "Equipo" in salida.columns:
+        salida = salida[salida["Equipo"] == filtro_equipo]
+
     if filtro_anio != "Todos" and "Año" in salida.columns:
         salida = salida[salida["Año"] == filtro_anio]
+
     if filtro_mes != "Todos" and "Mes" in salida.columns:
         salida = salida[salida["Mes"] == filtro_mes]
+
     return salida.copy()
 
 
-def tabla_limpia(
-    df,
-    columnas=None,
-    height=460,
-    centrar_todo=False,
-    modo_ultracompacto=False,
-    alinear_arriba_columnas=None,
-):
+def unidad_control_texto(unidad):
+    texto = str(unidad).strip()
+    if texto.lower() in ["", "nan", "none", "nat", "0"]:
+        return "Km/Horómetro"
+    texto_norm = normalizar_texto(texto)
+    if "horo" in texto_norm or "hora" in texto_norm:
+        return "Horómetro"
+    if "km" in texto_norm or "kilo" in texto_norm or "odometro" in texto_norm or "odom" in texto_norm:
+        return "Km"
+    return texto
+
+
+def unidad_control_por_equipo(equipo, unidad_actual="", tipo_equipo="", marca="", modelo=""):
+    """Determina la unidad correcta para el análisis de próxima mantención.
+    Regla operativa solicitada:
+    - Camión Ford Cargo y camioneta: Km.
+    - Minicargador, barredora, alza hombre y grúa horquilla: Horómetro.
+    - Si no se identifica el equipo, respeta la unidad de Excel si viene informada.
     """
-    Muestra cualquier planilla del sistema como una tabla HTML compacta.
+    texto = normalizar_texto(" ".join([str(equipo), str(tipo_equipo), str(marca), str(modelo)]))
 
-    El ancho de cada columna se calcula automáticamente según el tipo de
-    información. De esta forma, todas las columnas quedan dentro del ancho
-    disponible de la página principal, incluso en módulos con 10 a 12 campos.
+    # Equipos controlados por horómetro.
+    if (
+        "minicargador" in texto
+        or "mini_cargador" in texto
+        or "barredora" in texto
+        or "tennant" in texto
+        or ("alza" in texto and "hombre" in texto)
+        or "alzahombre" in texto
+        or "grua" in texto
+        or "horquilla" in texto
+        or "orquilla" in texto
+        or "montacarga" in texto
+        or "montacargas" in texto
+    ):
+        return "Horómetro"
+
+    # Equipos controlados por kilometraje.
+    if "camioneta" in texto or "mitsubishi" in texto:
+        return "Km"
+
+    if "camion" in texto or "ford_cargo" in texto or "ford" in texto:
+        return "Km"
+
+    if "carro" in texto or "arrastre" in texto:
+        return "Km"
+
+    unidad_txt = unidad_control_texto(unidad_actual)
+    return unidad_txt if unidad_txt != "Km/Horómetro" else "Km/Horómetro"
+
+
+def aplicar_unidad_control_por_equipo(df):
+    salida = df.copy()
+    for col in ["Equipo", "Tipo_Equipo", "Marca", "Modelo", "Unidad_Control"]:
+        if col not in salida.columns:
+            salida[col] = ""
+
+    salida["Unidad_Control"] = salida.apply(
+        lambda x: unidad_control_por_equipo(
+            x.get("Equipo", ""),
+            x.get("Unidad_Control", ""),
+            x.get("Tipo_Equipo", ""),
+            x.get("Marca", ""),
+            x.get("Modelo", ""),
+        ),
+        axis=1,
+    )
+    return salida
+
+
+def prioridad_estado_control(estado):
+    estado_norm = normalizar_texto(estado)
+    if "vencida" in estado_norm or "vence_ahora" in estado_norm:
+        return 0
+    if "critica" in estado_norm:
+        return 1
+    if "proxima" in estado_norm:
+        return 2
+    if "sin_lectura" in estado_norm:
+        return 3
+    if "al_dia" in estado_norm:
+        return 4
+    return 5
+
+
+def resumen_proximas_por_equipo(proximas):
+    """Deja una sola próxima mantención por equipo para el resumen ejecutivo.
+    Selecciona la más urgente de cada equipo y evita que alza hombre/barredora
+    repitan filas, permitiendo que también aparezcan camión y camioneta.
     """
-    if df is None or df.empty:
-        st.info("Sin registros para mostrar.")
-        return
+    if proximas is None or proximas.empty:
+        return pd.DataFrame(columns=getattr(proximas, "columns", []))
 
-    mostrar = df.copy()
+    salida = aplicar_unidad_control_por_equipo(proximas)
+    salida = enriquecer_estado_proximas(salida)
+    salida["_prioridad"] = salida["Estado_Control"].apply(prioridad_estado_control)
+    salida["_saldo_abs"] = salida["Saldo_Restante"].abs()
+    salida = salida.sort_values(["_prioridad", "Saldo_Restante", "_saldo_abs", "Equipo"], ascending=[True, True, True, True])
+    salida = salida.drop_duplicates(subset=["Equipo"], keep="first")
+    salida = salida.sort_values(["_prioridad", "Saldo_Restante", "Equipo"], ascending=[True, True, True])
+    return salida.drop(columns=["_prioridad", "_saldo_abs"], errors="ignore")
 
-    if columnas:
-        columnas = [columna for columna in columnas if columna in mostrar.columns]
-        mostrar = mostrar[columnas]
 
-    # Formato uniforme de fechas.
-    for columna in [
+def formatear_valor_control(valor, unidad=""):
+    valor_num = limpiar_numero(valor)
+    if valor_num <= 0:
+        return "Sin dato"
+    unidad_txt = unidad_control_texto(unidad)
+    return f"{numero(valor_num)} {unidad_txt}".strip()
+
+
+def formatear_saldo_control(valor, unidad=""):
+    """Formatea el saldo restante de próxima mantención.
+    Si el equipo está pasado, muestra el valor negativo solicitado
+    en vez de mostrar el valor absoluto.
+    """
+    valor_num = limpiar_numero(valor)
+    unidad_txt = unidad_control_texto(unidad)
+
+    if valor_num < 0:
+        return f"-{numero(abs(valor_num))} {unidad_txt}".strip()
+
+    if valor_num == 0:
+        return f"0 {unidad_txt}".strip()
+
+    return f"{numero(valor_num)} {unidad_txt}".strip()
+
+
+def calcular_estado_proxima_mantencion(km_actual, proxima_mantencion, unidad=""):
+    """Evalúa la próxima mantención por odómetro u horómetro.
+    La barra representa el avance de uso: actual / próxima mantención.
+    - Verde: saldo suficiente.
+    - Naranjo: saldo bajo.
+    - Rojo: vencida o crítica.
+    """
+    actual = limpiar_numero(km_actual)
+    proxima = limpiar_numero(proxima_mantencion)
+    unidad_txt = unidad_control_texto(unidad)
+
+    if proxima <= 0:
+        return 0, "Sin próxima mantención", "#94a3b8", "Sin dato", 0, "Sin dato"
+
+    proxima_txt = f"{numero(proxima)} {unidad_txt}".strip()
+
+    if actual <= 0:
+        return 0, "Sin lectura actual", "#94a3b8", proxima_txt, proxima, "Sin lectura"
+
+    restante = proxima - actual
+    avance = max(0, min(100, (actual / proxima) * 100))
+    porcentaje_restante = (restante / proxima) * 100 if proxima > 0 else 0
+
+    if restante < 0:
+        exceso = abs(restante)
+        return 100, f"Vencida: excedida en {numero(exceso)} {unidad_txt}", "#ef4444", proxima_txt, restante, "Vencida"
+
+    if restante == 0:
+        return 100, "Vence en lectura actual", "#ef4444", proxima_txt, restante, "Vence ahora"
+
+    if porcentaje_restante <= 5:
+        return avance, f"Crítica: faltan {numero(restante)} {unidad_txt}", "#ef4444", proxima_txt, restante, "Crítica"
+
+    if porcentaje_restante <= 15:
+        return avance, f"Próxima: faltan {numero(restante)} {unidad_txt}", "#f97316", proxima_txt, restante, "Próxima"
+
+    return avance, f"Al día: faltan {numero(restante)} {unidad_txt}", "#22c55e", proxima_txt, restante, "Al día"
+
+
+def enriquecer_estado_proximas(df):
+    salida = df.copy()
+    for col in ["Km_Horometro_Actual", "Proxima_Mantencion"]:
+        if col not in salida.columns:
+            salida[col] = 0
+        salida[col] = salida[col].apply(limpiar_numero)
+    if "Unidad_Control" not in salida.columns:
+        salida["Unidad_Control"] = ""
+
+    resultados = salida.apply(
+        lambda x: calcular_estado_proxima_mantencion(
+            x.get("Km_Horometro_Actual", 0),
+            x.get("Proxima_Mantencion", 0),
+            x.get("Unidad_Control", ""),
+        ),
+        axis=1,
+    )
+
+    salida["Avance_%"] = [r[0] for r in resultados]
+    salida["Estado_Control"] = [r[5] for r in resultados]
+    salida["Saldo_Restante"] = [r[4] for r in resultados]
+    salida["Texto_Estado"] = [r[1] for r in resultados]
+    salida["Proxima_Texto"] = [r[3] for r in resultados]
+    return salida
+
+
+def construir_proximas_mantenciones(equipos, mantenciones):
+    """Crea la base oficial de próximas mantenciones usando la hoja EQUIPOS.
+
+    Regla aplicada:
+    - La próxima mantención, lectura actual y unidad de control se toman desde la hoja EQUIPOS.
+    - Proxima_Mantencion se interpreta como lectura objetivo de Km u Horómetro, no como fecha.
+    - Mantenciones históricas NO se usan para definir la próxima mantención del resumen, porque pueden
+      traer registros antiguos, duplicados o valores parciales que distorsionan el análisis.
+    - La hoja MANTENCIONES solo se usa como respaldo descriptivo cuando falta categoría/descripción,
+      pero nunca reemplaza el valor de Proxima_Mantencion informado en EQUIPOS.
+    """
+    columnas = [
+        "Equipo",
+        "Marca",
+        "Modelo",
+        "Patente_Codigo",
+        "Km_Horometro_Actual",
+        "Unidad_Control",
+        "Frecuencia_Mantencion",
+        "Categoria",
+        "Tipo_Mantencion",
+        "Descripcion",
+        "Proxima_Mantencion",
+        "Costo_CLP",
+        "Observacion",
+    ]
+
+    if equipos is None or equipos.empty or "Equipo" not in equipos.columns:
+        return pd.DataFrame(columns=columnas)
+
+    # -----------------------------------------------------
+    # Base principal: hoja EQUIPOS.
+    # Aquí están los valores oficiales solicitados por el usuario:
+    # Km_Horometro_Actual, Unidad_Control y Proxima_Mantencion.
+    # -----------------------------------------------------
+    salida = equipos.copy()
+
+    for col in columnas:
+        if col not in salida.columns:
+            if col in ["Km_Horometro_Actual", "Proxima_Mantencion", "Costo_CLP"]:
+                salida[col] = 0
+            else:
+                salida[col] = ""
+
+    salida["Equipo"] = salida["Equipo"].fillna("").astype(str).str.strip()
+    salida = salida[~salida["Equipo"].str.lower().isin(["", "none", "nan", "sin equipo"])].copy()
+
+    salida["Km_Horometro_Actual"] = salida["Km_Horometro_Actual"].apply(limpiar_numero)
+    salida["Proxima_Mantencion"] = salida["Proxima_Mantencion"].apply(limpiar_numero)
+    salida["Costo_CLP"] = salida["Costo_CLP"].apply(limpiar_numero)
+
+    # Solo se analizan equipos con próxima mantención numérica registrada en hoja EQUIPOS.
+    salida = salida[salida["Proxima_Mantencion"] > 0].copy()
+
+    if salida.empty:
+        return pd.DataFrame(columns=columnas)
+
+    # Normaliza unidad según regla operativa:
+    # Camión/camioneta/carro = Km | Equipos con horómetro = Horómetro.
+    salida = aplicar_unidad_control_por_equipo(salida)
+
+    # Completa campos descriptivos desde la misma hoja EQUIPOS.
+    salida["Categoria"] = salida["Categoria"].where(
+        ~salida["Categoria"].fillna("").astype(str).str.strip().str.lower().isin(["", "none", "nan", "nat"]),
+        salida["Frecuencia_Mantencion"],
+    )
+    salida["Tipo_Mantencion"] = salida["Tipo_Mantencion"].where(
+        ~salida["Tipo_Mantencion"].fillna("").astype(str).str.strip().str.lower().isin(["", "none", "nan", "nat"]),
+        salida["Frecuencia_Mantencion"],
+    )
+    salida["Descripcion"] = salida["Descripcion"].where(
+        ~salida["Descripcion"].fillna("").astype(str).str.strip().str.lower().isin(["", "none", "nan", "nat"]),
+        salida["Observacion"],
+    )
+
+    # Respaldo opcional desde hoja MANTENCIONES solo para texto/costo, no para próxima lectura.
+    if mantenciones is not None and not mantenciones.empty and "Equipo" in mantenciones.columns:
+        mt = mantenciones.copy()
+        mt["Equipo"] = mt["Equipo"].fillna("").astype(str).str.strip()
+        if "Fecha" in mt.columns:
+            mt["Fecha"] = mt["Fecha"].apply(convertir_fecha)
+            mt = mt.sort_values("Fecha", ascending=False)
+        for col in ["Categoria", "Tipo_Mantencion", "Descripcion", "Costo_CLP", "Observacion"]:
+            if col not in mt.columns:
+                mt[col] = 0 if col == "Costo_CLP" else ""
+        mt = mt.drop_duplicates(subset=["Equipo"], keep="first")[["Equipo", "Categoria", "Tipo_Mantencion", "Descripcion", "Costo_CLP", "Observacion"]]
+        salida = salida.merge(mt, on="Equipo", how="left", suffixes=("", "_MT"))
+        for col in ["Categoria", "Tipo_Mantencion", "Descripcion", "Observacion"]:
+            col_mt = f"{col}_MT"
+            if col_mt in salida.columns:
+                actual = salida[col].fillna("").astype(str).str.strip()
+                respaldo = salida[col_mt].fillna("").astype(str).str.strip()
+                salida[col] = actual.where(~actual.str.lower().isin(["", "none", "nan", "nat"]), respaldo)
+        if "Costo_CLP_MT" in salida.columns:
+            costo_actual = salida["Costo_CLP"].apply(limpiar_numero)
+            costo_mt = salida["Costo_CLP_MT"].apply(limpiar_numero)
+            salida["Costo_CLP"] = costo_actual.where(costo_actual > 0, costo_mt)
+        salida = salida.drop(columns=[c for c in salida.columns if c.endswith("_MT")], errors="ignore")
+
+    salida = salida[columnas].copy()
+    salida["Proxima_Mantencion"] = salida["Proxima_Mantencion"].apply(limpiar_numero)
+    salida["Km_Horometro_Actual"] = salida["Km_Horometro_Actual"].apply(limpiar_numero)
+    salida["Costo_CLP"] = salida["Costo_CLP"].apply(limpiar_numero)
+    salida = aplicar_unidad_control_por_equipo(salida)
+    salida = enriquecer_estado_proximas(salida)
+
+    # Un solo análisis por equipo, siempre desde hoja EQUIPOS.
+    salida["_prioridad"] = salida["Estado_Control"].apply(prioridad_estado_control)
+    salida = salida.sort_values(["_prioridad", "Saldo_Restante", "Equipo"], ascending=[True, True, True])
+    salida = salida.drop_duplicates(subset=["Equipo"], keep="first")
+    salida = salida.drop(columns=["_prioridad"], errors="ignore")
+
+    return salida
+
+def ocultar_columnas_tecnicas(df):
+    columnas_ocultar = [
+        "ID_Equipo",
+        "ID_Mantencion",
+        "ID_Gasto",
+        "ID_Registro",
+        "Área",
+        "Area",
+        "Responsable",
+        "Imagen",
+        "Mes_Numero",
+    ]
+    return df.drop(columns=[c for c in columnas_ocultar if c in df.columns], errors="ignore")
+
+
+def normalizar_tipo_mantencion(valor):
+    """Normaliza mantenciones a solo dos familias operativas: Preventiva y Correctiva."""
+    texto = str(valor).strip()
+
+    if texto.lower() in ["", "nan", "none", "nat", "sin tipo", "0", "n/a", "na", "n.a", "no aplica"]:
+        return "Sin tipo"
+
+    texto_norm = normalizar_texto(texto)
+
+    if "correct" in texto_norm:
+        return "Correctiva"
+
+    # Todo lo planificado, preventivo, predictivo o inspecciones se consolida como Preventiva.
+    if (
+        "prevent" in texto_norm
+        or "predict" in texto_norm
+        or "inspeccion" in texto_norm
+        or "revision" in texto_norm
+        or "mensual" in texto_norm
+        or "250_horas" in texto_norm
+        or "10_000" in texto_norm
+    ):
+        return "Preventiva"
+
+    return texto.strip().capitalize()
+
+
+
+
+def normalizar_tipo_gasto(valor):
+    """Normaliza los tipos de gasto creados en Excel.
+    Permite que Repuesto, Administrativo y Mantención Correctiva/Preventiva
+    se usen correctamente en gráficos, filtros y consolidado de costos.
+    """
+    texto = str(valor).strip()
+
+    if texto.lower() in ["", "nan", "none", "nat", "sin tipo", "0"]:
+        return "Sin tipo"
+
+    texto_norm = normalizar_texto(texto)
+
+    if "combustible" in texto_norm or "diesel" in texto_norm or "petroleo" in texto_norm:
+        return "Combustible"
+
+    if "administr" in texto_norm or "permiso" in texto_norm or "circulacion" in texto_norm or "seguro" in texto_norm or "soap" in texto_norm or "revision_tecnica" in texto_norm or "rev_tecnica" in texto_norm:
+        return "Administrativo"
+
+    if "mantencion" in texto_norm or "mantenimiento" in texto_norm or "mant" in texto_norm:
+        if "correct" in texto_norm:
+            return "Mantención Correctiva"
+        if "prevent" in texto_norm:
+            return "Mantención Preventiva"
+        if "predict" in texto_norm or "inspeccion" in texto_norm:
+            return "Mantención Preventiva"
+        return "Mantención"
+
+    if "repuesto" in texto_norm or "filtro" in texto_norm or "manguera" in texto_norm or "neumatic" in texto_norm or "aceite" in texto_norm:
+        return "Repuesto"
+
+    return texto.strip().capitalize()
+
+
+def es_combustible_tipo(tipo):
+    return normalizar_tipo_gasto(tipo) == "Combustible"
+
+
+def tipo_mantencion_desde_gasto(tipo_gasto, descripcion="", mantencion=""):
+    """Devuelve Preventiva/Correctiva cuando un gasto adicional corresponde a mantención.
+    Prioriza la columna Mantencion de la hoja Gastos/Repuestos. Así, un registro con
+    Tipo_Gasto = Repuesto pero Mantencion = Correctiva se carga al consolidado Correctiva.
+    """
+    mant_directa = normalizar_tipo_mantencion(mantencion)
+    if mant_directa in ["Preventiva", "Correctiva"]:
+        return mant_directa
+
+    texto = f"{tipo_gasto} {descripcion} {mantencion}"
+    texto_norm = normalizar_texto(texto)
+
+    if "combustible" in texto_norm or "diesel" in texto_norm or "petroleo" in texto_norm:
+        return ""
+
+    if "correct" in texto_norm:
+        return "Correctiva"
+    if "prevent" in texto_norm:
+        return "Preventiva"
+    if "predict" in texto_norm or "inspeccion" in texto_norm:
+        return "Preventiva"
+
+    return ""
+
+
+def categoria_costo_gasto(tipo_gasto, descripcion="", mantencion=""):
+    """Clasificación final para el consolidado de costos.
+    - Si la hoja Gastos/Repuestos trae Mantencion = Preventiva/Correctiva,
+      ese costo se suma a ese grupo, aunque Tipo_Gasto diga Repuesto.
+    - Administrativo agrupa permisos de circulación, seguros, SOAP y revisión técnica.
+    - Repuesto se mantiene separado solo si no está asociado a una mantención.
+    """
+    tipo_norm = normalizar_tipo_gasto(tipo_gasto)
+    mant = tipo_mantencion_desde_gasto(tipo_norm, descripcion, mantencion)
+
+    if mant:
+        return mant
+
+    if tipo_norm == "Administrativo":
+        return "Administrativos"
+
+    if tipo_norm == "Repuesto":
+        return "Repuestos"
+
+    if tipo_norm == "Combustible":
+        return "Combustible"
+
+    if tipo_norm in ["Sin tipo", ""]:
+        return "Gastos adicionales"
+
+    return tipo_norm
+
+
+def gastos_no_combustible(gastos):
+    if gastos is None or gastos.empty:
+        return pd.DataFrame(columns=getattr(gastos, "columns", []))
+
+    salida = gastos.copy()
+    if "Tipo_Gasto" not in salida.columns:
+        salida["Tipo_Gasto"] = "Sin tipo"
+
+    salida["Tipo_Gasto"] = salida["Tipo_Gasto"].apply(normalizar_tipo_gasto)
+    return salida[~salida["Tipo_Gasto"].apply(es_combustible_tipo)].copy()
+
+
+def construir_consolidado_costos(mantenciones, gastos):
+    """Construye el consolidado para gráficos de costos.
+    Incluye mantenciones registradas en hoja MANTENCIONES y gastos adicionales
+    clasificados desde Tipo_Gasto.
+    """
+    partes = []
+
+    if mantenciones is not None and not mantenciones.empty and "Costo_CLP" in mantenciones.columns:
+        mant = mantenciones.copy()
+        if "Tipo_Mantencion" not in mant.columns:
+            mant["Tipo_Mantencion"] = "Sin tipo"
+        mant["Item"] = mant["Tipo_Mantencion"].apply(normalizar_tipo_mantencion)
+        mant["Costo"] = mant["Costo_CLP"].apply(limpiar_numero)
+        partes.append(mant[["Item", "Costo"]])
+
+    if gastos is not None and not gastos.empty and "Costo_CLP" in gastos.columns:
+        gas = gastos.copy()
+        if "Tipo_Gasto" not in gas.columns:
+            gas["Tipo_Gasto"] = "Sin tipo"
+        if "Descripcion" not in gas.columns:
+            gas["Descripcion"] = ""
+        gas["Tipo_Gasto"] = gas["Tipo_Gasto"].apply(normalizar_tipo_gasto)
+        gas["Item"] = gas.apply(lambda x: categoria_costo_gasto(x.get("Tipo_Gasto", ""), x.get("Descripcion", ""), x.get("Mantencion", "")), axis=1)
+        gas["Costo"] = gas["Costo_CLP"].apply(limpiar_numero)
+        gas = gas[gas["Item"] != "Combustible"].copy()
+        partes.append(gas[["Item", "Costo"]])
+
+    if not partes:
+        return pd.DataFrame(columns=["Item", "Costo"])
+
+    salida = pd.concat(partes, ignore_index=True)
+    salida = salida[salida["Costo"] > 0].copy()
+
+    if salida.empty:
+        return pd.DataFrame(columns=["Item", "Costo"])
+
+    orden = ["Preventiva", "Correctiva", "Mantención", "Repuestos", "Administrativos", "Gastos adicionales"]
+    salida = salida.groupby("Item", as_index=False)["Costo"].sum()
+    salida["_orden"] = salida["Item"].apply(lambda x: orden.index(x) if x in orden else len(orden))
+    salida = salida.sort_values(["_orden", "Costo"], ascending=[True, False]).drop(columns=["_orden"])
+    return salida
+
+def preparar_tabla_mantenciones(mantenciones):
+    mostrar = mantenciones.copy()
+
+    if "Tipo_Mantencion" in mostrar.columns:
+        mostrar["Mantencion"] = mostrar["Tipo_Mantencion"].apply(normalizar_tipo_mantencion)
+    elif "Mantencion" in mostrar.columns:
+        mostrar["Mantencion"] = mostrar["Mantencion"].apply(normalizar_tipo_mantencion)
+    else:
+        mostrar["Mantencion"] = "Sin tipo"
+
+    if "Fecha" in mostrar.columns:
+        mostrar["Fecha"] = mostrar["Fecha"].apply(fecha_texto)
+
+    if "Costo_CLP" in mostrar.columns:
+        mostrar["Costo_CLP"] = mostrar["Costo_CLP"].apply(pesos)
+
+    columnas_orden = [
         "Fecha",
-        "Fecha_Compromiso",
-        "Vencimiento",
-        "Proxima_Reposicion",
-        "Fecha_Programada",
-        "Fecha_Realizacion",
-    ]:
-        if columna in mostrar.columns:
-            mostrar[columna] = mostrar[columna].apply(fecha_texto)
+        "Equipo",
+        "Mantencion",
+        "Categoria",
+        "Proveedor",
+        "Descripcion",
+        "Costo_CLP",
+        "Estado_Mantencion",
+        "Documento_Respaldo",
+        "Observacion",
+        "Mes",
+        "Año",
+    ]
 
-    # Encabezados visibles.
+    columnas_orden = [c for c in columnas_orden if c in mostrar.columns]
+    mostrar = mostrar[columnas_orden].copy()
+
     mostrar = mostrar.rename(
         columns={
-            "Tipo_Observacion": "Tipo observación",
-            "Conducta_Segura": "Conducta segura",
-            "Conducta_Riesgo": "Conducta de riesgo",
-            "Medida_Correctiva": "Medida correctiva",
-            "Fecha_Compromiso": "Fecha compromiso",
-            "Tipo_Evento": "Tipo evento",
-            "Accion_Inmediata": "Acción inmediata",
-            "Tipo_Inspeccion": "Tipo inspección",
-            "Accion_Correctiva": "Acción correctiva",
-            "Proxima_Reposicion": "Próxima reposición",
-            "Tipo_Actividad": "Tipo de actividad",
-            "Eje_Trabajo": "Eje de trabajo",
-            "Fecha_Programada": "Fecha programada",
-            "Fecha_Realizacion": "Fecha realización",
-            "Tipo_Reconocimiento": "Tipo de reconocimiento",
-            "Tipo_Reunion": "Tipo de reunión",
-            "Tipo_Trabajo": "Tipo trabajo",
+            "Mantencion": "Mantención",
+            "Categoria": "Categoría",
+            "Descripcion": "Descripción",
+            "Costo_CLP": "Costo",
+            "Estado_Mantencion": "Estado",
+            "Documento_Respaldo": "Documento respaldo",
+            "Observacion": "Observación",
+        }
+    )
+
+    return mostrar
+
+
+
+def preparar_tabla_repuestos(gastos):
+    mostrar = gastos.copy()
+
+    # Elimina filas vacías que vienen desde el formato de Excel.
+    if "Equipo" in mostrar.columns:
+        equipo_txt = mostrar["Equipo"].fillna("").astype(str).str.strip().str.lower()
+    else:
+        equipo_txt = pd.Series([""] * len(mostrar), index=mostrar.index)
+
+    if "Descripcion" in mostrar.columns:
+        desc_txt = mostrar["Descripcion"].fillna("").astype(str).str.strip().str.lower()
+    else:
+        desc_txt = pd.Series([""] * len(mostrar), index=mostrar.index)
+
+    costo_num = mostrar["Costo_CLP"].apply(limpiar_numero) if "Costo_CLP" in mostrar.columns else pd.Series([0] * len(mostrar), index=mostrar.index)
+    mostrar = mostrar[(~equipo_txt.isin(["", "none", "nan"])) | (~desc_txt.isin(["", "none", "nan"])) | (costo_num > 0)].copy()
+
+    if "Fecha" in mostrar.columns:
+        mostrar["Fecha"] = mostrar["Fecha"].apply(fecha_texto)
+
+    if "Costo_CLP" in mostrar.columns:
+        mostrar["Costo_CLP"] = mostrar["Costo_CLP"].apply(pesos)
+
+    if "Clasificacion_Costo" not in mostrar.columns:
+        mostrar["Clasificacion_Costo"] = mostrar.apply(
+            lambda x: categoria_costo_gasto(x.get("Tipo_Gasto", ""), x.get("Descripcion", ""), x.get("Mantencion", "")),
+            axis=1,
+        )
+
+    columnas_orden = [
+        "Fecha",
+        "Equipo",
+        "Mantencion",
+        "Tipo_Gasto",
+        "Clasificacion_Costo",
+        "Descripcion",
+        "Proveedor",
+        "Costo_CLP",
+        "Documento_Respaldo",
+        "Observacion",
+        "Mes",
+        "Año",
+        "Periodo",
+    ]
+
+    columnas_orden = [c for c in columnas_orden if c in mostrar.columns]
+    mostrar = mostrar[columnas_orden].copy()
+
+    mostrar = mostrar.rename(
+        columns={
+            "Mantencion": "Mantención",
+            "Tipo_Gasto": "Tipo gasto",
+            "Clasificacion_Costo": "Consolidado",
+            "Descripcion": "Descripción",
+            "Costo_CLP": "Costo",
+            "Documento_Respaldo": "Documento respaldo",
+            "Observacion": "Observación",
+        }
+    )
+
+    return mostrar
+
+
+def preparar_tabla_proximas(proximas):
+    mostrar = proximas.copy()
+    mostrar = enriquecer_estado_proximas(mostrar)
+
+    if "Km_Horometro_Actual" in mostrar.columns:
+        mostrar["Km_Horometro_Actual"] = mostrar.apply(
+            lambda x: formatear_valor_control(x.get("Km_Horometro_Actual", 0), x.get("Unidad_Control", "")),
+            axis=1,
+        )
+
+    if "Saldo_Restante" in mostrar.columns:
+        mostrar["Saldo_Restante"] = mostrar.apply(
+            lambda x: formatear_saldo_control(x.get("Saldo_Restante", 0), x.get("Unidad_Control", "")),
+            axis=1,
+        )
+
+    if "Costo_CLP" in mostrar.columns:
+        mostrar["Costo_CLP"] = mostrar["Costo_CLP"].apply(pesos)
+
+    columnas_orden = [
+        "Equipo",
+        "Marca",
+        "Modelo",
+        "Patente_Codigo",
+        "Km_Horometro_Actual",
+        "Unidad_Control",
+        "Frecuencia_Mantencion",
+        "Categoria",
+        "Tipo_Mantencion",
+        "Descripcion",
+        "Proxima_Mantencion",
+        "Estado_Control",
+        "Saldo_Restante",
+        "Texto_Estado",
+        "Costo_CLP",
+        "Observacion",
+    ]
+
+    columnas_orden = [c for c in columnas_orden if c in mostrar.columns]
+    mostrar = mostrar[columnas_orden].copy()
+
+    mostrar = mostrar.rename(
+        columns={
+            "Patente_Codigo": "Patente / Código",
+            "Km_Horometro_Actual": "Lectura actual",
+            "Unidad_Control": "Unidad",
+            "Frecuencia_Mantencion": "Frecuencia",
+            "Categoria": "Categoría",
+            "Tipo_Mantencion": "Mantención",
+            "Descripcion": "Descripción",
+            "Proxima_Mantencion": "Próxima mantención",
+            "Estado_Control": "Estado",
+            "Saldo_Restante": "Saldo restante",
+            "Texto_Estado": "Análisis",
+            "Costo_CLP": "Costo",
+            "Observacion": "Observación",
+        }
+    )
+
+    return mostrar
+
+def estado_clase(estado):
+    estado = str(estado).lower()
+
+    if "operativo" in estado:
+        return "estado-ok"
+
+    if "fuera" in estado:
+        return "estado-rojo"
+
+    if "mantencion" in estado or "mantención" in estado:
+        return "estado-alerta"
+
+    if "uso" in estado:
+        return "estado-alerta"
+
+    return "estado-alerta"
+
+
+# =========================================================
+# ESTILO GENERAL
+# =========================================================
+
+def aplicar_estilo():
+    sello_src = ""
+    ruta_sello = buscar_imagen_por_nombre("saivam")
+
+    if ruta_sello:
+        sello_b64 = archivo_a_base64(ruta_sello)
+        sello_mime = extension_mime(ruta_sello)
+
+        if sello_b64:
+            sello_src = f"data:{sello_mime};base64,{sello_b64}"
+
+    if sello_src:
+        css_sello = """
+<style>
+.stApp::before {
+    content: "" !important;
+    position: fixed !important;
+    top: 52% !important;
+    left: calc(320px + 50%) !important;
+    transform: translate(-50%, -50%) !important;
+    width: 520px !important;
+    height: 520px !important;
+    background-image: url('__SELLO_SRC__') !important;
+    background-repeat: no-repeat !important;
+    background-position: center !important;
+    background-size: contain !important;
+    opacity: 0.045 !important;
+    z-index: 0 !important;
+    pointer-events: none !important;
+}
+
+.main .block-container {
+    position: relative !important;
+    z-index: 1 !important;
+}
+
+
+/* =========================================================
+   CORRECCIÓN 3.5: SIDEBAR FIJO, VISIBLE Y SIN DESORDEN
+   ========================================================= */
+:root {
+    --menu-panel-width: 320px !important;
+    --menu-inner-width: 286px !important;
+}
+
+section[data-testid="stSidebar"] {
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    bottom: 0 !important;
+    width: var(--menu-panel-width) !important;
+    min-width: var(--menu-panel-width) !important;
+    max-width: var(--menu-panel-width) !important;
+    height: 100vh !important;
+    transform: translateX(0px) !important;
+    background: #020617 !important;
+    z-index: 9999 !important;
+    border-right: 1px solid rgba(147, 197, 253, 0.34) !important;
+    box-shadow: 10px 0 24px rgba(15, 23, 42, 0.32) !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+}
+
+section[data-testid="stSidebar"] > div,
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    width: var(--menu-panel-width) !important;
+    min-width: var(--menu-panel-width) !important;
+    max-width: var(--menu-panel-width) !important;
+    min-height: 100vh !important;
+    background: #020617 !important;
+    padding: 12px 14px 18px 14px !important;
+    box-sizing: border-box !important;
+    overflow-x: hidden !important;
+}
+
+[data-testid="stAppViewContainer"] > .main,
+section.main,
+main {
+    margin-left: var(--menu-panel-width) !important;
+    width: calc(100vw - var(--menu-panel-width)) !important;
+    max-width: calc(100vw - var(--menu-panel-width)) !important;
+}
+
+.main .block-container,
+.block-container {
+    padding-top: 0rem !important;
+    padding-left: 1.25rem !important;
+    padding-right: 1.25rem !important;
+    max-width: none !important;
+    min-width: 1120px !important;
+    overflow-x: visible !important;
+}
+
+[data-testid="stSidebarCollapsedControl"],
+[data-testid="collapsedControl"],
+button[kind="header"],
+header[data-testid="stHeader"] {
+    display: none !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+}
+
+section[data-testid="stSidebar"] .menu-panel-content,
+section[data-testid="stSidebar"] .menu-line,
+section[data-testid="stSidebar"] .menu-footer-box,
+section[data-testid="stSidebar"] div[data-testid="stButton"],
+section[data-testid="stSidebar"] div[data-testid="stSelectbox"],
+section[data-testid="stSidebar"] [data-baseweb="select"],
+section[data-testid="stSidebar"] [data-baseweb="select"] > div {
+    width: var(--menu-inner-width) !important;
+    max-width: var(--menu-inner-width) !important;
+    min-width: 0 !important;
+    box-sizing: border-box !important;
+}
+
+section[data-testid="stSidebar"] .menu-brand {
+    display: flex !important;
+    align-items: center !important;
+    gap: 12px !important;
+    width: var(--menu-inner-width) !important;
+    margin: 0 0 18px 0 !important;
+}
+
+section[data-testid="stSidebar"] .menu-icon {
+    flex: 0 0 52px !important;
+}
+
+section[data-testid="stSidebar"] .menu-title,
+section[data-testid="stSidebar"] .menu-title *,
+section[data-testid="stSidebar"] .menu-subtitle,
+section[data-testid="stSidebar"] .menu-subtitle * {
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    opacity: 1 !important;
+}
+
+section[data-testid="stSidebar"] div[data-testid="stButton"] button {
+    width: var(--menu-inner-width) !important;
+    min-height: 48px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: flex-start !important;
+    text-align: left !important;
+    border-radius: 13px !important;
+    background: rgba(15, 23, 42, 0.72) !important;
+    border: 1px solid rgba(147, 197, 253, 0.28) !important;
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    font-size: 15px !important;
+    font-weight: 950 !important;
+    margin-bottom: 7px !important;
+    padding: 10px 12px !important;
+    white-space: normal !important;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.85) !important;
+}
+
+section[data-testid="stSidebar"] div[data-testid="stButton"] button:hover {
+    background: rgba(37, 99, 235, 0.62) !important;
+    border-color: rgba(191, 219, 254, 0.80) !important;
+}
+
+section[data-testid="stSidebar"] .menu-active-item {
+    width: var(--menu-inner-width) !important;
+    max-width: var(--menu-inner-width) !important;
+    box-sizing: border-box !important;
+    padding: 12px 12px !important;
+    border-radius: 13px !important;
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    background: linear-gradient(135deg, #2563eb 0%, #0ea5e9 100%) !important;
+    border: 1px solid rgba(219, 234, 254, 0.95) !important;
+    box-shadow: 0 8px 18px rgba(37, 99, 235, 0.38) !important;
+    font-size: 15.5px !important;
+    font-weight: 950 !important;
+    line-height: 1.25 !important;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.70) !important;
+    margin-bottom: 7px !important;
+    white-space: normal !important;
+}
+
+section[data-testid="stSidebar"] div[data-testid="stSelectbox"] label,
+section[data-testid="stSidebar"] div[data-testid="stSelectbox"] label * {
+    color: #dbeafe !important;
+    -webkit-text-fill-color: #dbeafe !important;
+    opacity: 1 !important;
+    font-weight: 950 !important;
+}
+
+section[data-testid="stSidebar"] [data-baseweb="select"] > div {
+    background: #ffffff !important;
+    border-radius: 12px !important;
+    min-height: 44px !important;
+    border: 1px solid rgba(255,255,255,0.45) !important;
+}
+
+section[data-testid="stSidebar"] [data-baseweb="select"] * {
+    color: #0f172a !important;
+    -webkit-text-fill-color: #0f172a !important;
+    font-weight: 800 !important;
+}
+
+.title-main {
+    white-space: nowrap !important;
+    overflow: visible !important;
+}
+
+.kpi-card {
+    min-width: 205px !important;
+}
+
+[data-testid="stHorizontalBlock"] {
+    flex-wrap: nowrap !important;
+}
+
+[data-testid="stDataFrame"],
+[data-testid="stPlotlyChart"] {
+    max-width: 100% !important;
+    overflow: hidden !important;
+}
+
+</style>
+        """
+        st.markdown(
+            css_sello.replace("__SELLO_SRC__", sello_src),
+            unsafe_allow_html=True,
+        )
+
+    st.markdown(
+        """
+<style>
+
+header[data-testid="stHeader"],
+[data-testid="stToolbar"],
+[data-testid="stDecoration"],
+[data-testid="stStatusWidget"],
+[data-testid="stDeployButton"],
+#MainMenu,
+footer,
+[data-testid="collapsedControl"],
+button[kind="header"] {
+    display: none !important;
+    visibility: hidden !important;
+    height: 0px !important;
+    min-height: 0px !important;
+    max-height: 0px !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+}
+
+html,
+body,
+.stApp,
+[data-testid="stAppViewContainer"],
+[data-testid="stAppViewContainer"] > .main,
+section.main,
+main {
+    background: #eef3f9 !important;
+    color: #0f172a !important;
+    padding-top: 0px !important;
+    margin-top: 0px !important;
+}
+
+.main .block-container,
+.block-container,
+section.main > div {
+    padding-top: 0rem !important;
+    margin-top: 0rem !important;
+    padding-bottom: 2rem !important;
+    padding-left: 0rem !important;
+    padding-right: 0.75rem !important;
+    max-width: 100% !important;
+}
+
+div[data-testid="stVerticalBlock"] {
+    gap: 0.45rem !important;
+}
+
+.stMarkdown h1 a,
+.stMarkdown h2 a,
+.stMarkdown h3 a {
+    display: none !important;
+    visibility: hidden !important;
+}
+
+/* =========================================================
+   PANEL IZQUIERDO OSCURO COMPLETO
+   ========================================================= */
+
+.menu-marker {
+    display: none;
+}
+
+/* Fondo fijo real del panel izquierdo completo */
+.menu-bg {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 285px !important;
+    height: 100vh !important;
+    background: #020617 !important;
+    z-index: 0 !important;
+    border-right: 1px solid rgba(147, 197, 253, 0.28) !important;
+    box-shadow: 10px 0 24px rgba(15, 23, 42, 0.35) !important;
+}
+
+/* Columna izquierda sobre el fondo oscuro */
+div[data-testid="column"]:has(.menu-marker),
+div[data-testid="column"]:has(.menu-brand),
+div[data-testid="column"]:has(.menu-bg) {
+    background: transparent !important;
+    min-height: 100vh !important;
+    height: 100vh !important;
+    padding: 14px 12px 18px 12px !important;
+    position: sticky !important;
+    top: 0 !important;
+    align-self: flex-start !important;
+    z-index: 2 !important;
+}
+
+/* Todo el contenido interno del menú queda transparente */
+div[data-testid="column"]:has(.menu-marker) > div,
+div[data-testid="column"]:has(.menu-brand) > div,
+div[data-testid="column"]:has(.menu-bg) > div,
+div[data-testid="column"]:has(.menu-marker) div,
+div[data-testid="column"]:has(.menu-brand) div,
+div[data-testid="column"]:has(.menu-bg) div {
+    background-color: transparent !important;
+}
+
+/* Contenido del menú encima del fondo */
+.menu-panel-content,
+.menu-brand,
+.menu-line,
+.menu-footer-box,
+.menu-info {
+    position: relative !important;
+    z-index: 3 !important;
+}
+
+/* Encabezado del panel izquierdo */
+.menu-brand {
+    display: flex !important;
+    align-items: center !important;
+    gap: 11px !important;
+    margin-top: 2px !important;
+    margin-bottom: 18px !important;
+    background: transparent !important;
+}
+
+.menu-icon {
+    background: linear-gradient(135deg, #0ea5e9 0%, #2563eb 100%) !important;
+    width: 52px !important;
+    height: 52px !important;
+    border-radius: 16px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    font-size: 27px !important;
+    box-shadow: 0 10px 24px rgba(37, 99, 235, 0.40) !important;
+}
+
+.menu-icon-img {
+    width: 44px !important;
+    height: 44px !important;
+    min-width: 44px !important;
+    max-width: 44px !important;
+    border-radius: 16px !important;
+    overflow: hidden !important;
+    background: transparent !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    box-shadow: none !important;
+    border: none !important;
+}
+
+.menu-icon-img img {
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: contain !important;
+    display: block !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    box-sizing: border-box !important;
+}
+
+section[data-testid="stSidebar"] .menu-icon-img {
+    flex: 0 0 44px !important;
+}
+
+.menu-title {
+    color: #ffffff !important;
+    font-weight: 950 !important;
+    font-size: 13.8px !important;
+    line-height: 1.18 !important;
+    letter-spacing: 0.45px !important;
+    text-shadow: 0 2px 5px rgba(0,0,0,0.75) !important;
+}
+
+.menu-subtitle {
+    color: #bfdbfe !important;
+    font-size: 11.5px !important;
+    margin-top: 5px !important;
+    font-weight: 950 !important;
+    letter-spacing: 0.30px !important;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.65) !important;
+}
+
+.menu-line {
+    border: 0 !important;
+    border-top: 1px solid rgba(191, 219, 254, 0.25) !important;
+    margin: 14px 0 16px 0 !important;
+}
+
+/* Items del menú */
+div[data-testid="column"]:has(.menu-marker) div[role="radiogroup"],
+div[data-testid="column"]:has(.menu-bg) div[role="radiogroup"] {
+    gap: 0.32rem !important;
+    background: transparent !important;
+    position: relative !important;
+    z-index: 3 !important;
+}
+
+div[data-testid="column"]:has(.menu-marker) div[role="radiogroup"] label,
+div[data-testid="column"]:has(.menu-bg) div[role="radiogroup"] label {
+    background: transparent !important;
+    border-radius: 12px !important;
+    padding: 8px 10px !important;
+    margin-bottom: 5px !important;
+    min-height: 38px !important;
+    border: 1px solid transparent !important;
+}
+
+div[data-testid="column"]:has(.menu-marker) div[role="radiogroup"] label:hover,
+div[data-testid="column"]:has(.menu-bg) div[role="radiogroup"] label:hover {
+    background: rgba(37, 99, 235, 0.25) !important;
+    border: 1px solid rgba(147, 197, 253, 0.40) !important;
+}
+
+div[data-testid="column"]:has(.menu-marker) div[role="radiogroup"] label:has(input:checked),
+div[data-testid="column"]:has(.menu-bg) div[role="radiogroup"] label:has(input:checked) {
+    background: rgba(37, 99, 235, 0.35) !important;
+    border: 1px solid rgba(147, 197, 253, 0.55) !important;
+    box-shadow: 0 8px 18px rgba(37, 99, 235, 0.28) !important;
+}
+
+div[data-testid="column"]:has(.menu-marker) div[role="radiogroup"] label p,
+div[data-testid="column"]:has(.menu-bg) div[role="radiogroup"] label p {
+    color: #ffffff !important;
+    font-size: 14px !important;
+    line-height: 1.18 !important;
+    font-weight: 850 !important;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.45) !important;
+}
+
+
+
+/* Refuerzo de legibilidad para textos del menú izquierdo */
+div[data-testid="column"]:has(.menu-bg) div[role="radiogroup"] *,
+div[data-testid="column"]:has(.menu-marker) div[role="radiogroup"] * {
+    color: #ffffff !important;
+    opacity: 1 !important;
+    font-weight: 900 !important;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.75) !important;
+}
+
+div[data-testid="column"]:has(.menu-bg) div[role="radiogroup"] label p,
+div[data-testid="column"]:has(.menu-bg) div[role="radiogroup"] label span,
+div[data-testid="column"]:has(.menu-bg) div[role="radiogroup"] label div,
+div[data-testid="column"]:has(.menu-marker) div[role="radiogroup"] label p,
+div[data-testid="column"]:has(.menu-marker) div[role="radiogroup"] label span,
+div[data-testid="column"]:has(.menu-marker) div[role="radiogroup"] label div {
+    color: #ffffff !important;
+    opacity: 1 !important;
+    font-size: 16px !important;
+    font-weight: 900 !important;
+    letter-spacing: 0.10px !important;
+}
+
+div[data-testid="column"]:has(.menu-bg) div[role="radiogroup"] label:has(input:checked) p,
+div[data-testid="column"]:has(.menu-bg) div[role="radiogroup"] label:has(input:checked) span,
+div[data-testid="column"]:has(.menu-bg) div[role="radiogroup"] label:has(input:checked) div,
+div[data-testid="column"]:has(.menu-marker) div[role="radiogroup"] label:has(input:checked) p,
+div[data-testid="column"]:has(.menu-marker) div[role="radiogroup"] label:has(input:checked) span,
+div[data-testid="column"]:has(.menu-marker) div[role="radiogroup"] label:has(input:checked) div {
+    color: #ffffff !important;
+    opacity: 1 !important;
+    font-weight: 950 !important;
+}
+
+/* Texto Equipo, Año, Mes */
+div[data-testid="column"]:has(.menu-marker) label,
+div[data-testid="column"]:has(.menu-bg) label {
+    color: #e0f2fe !important;
+    font-weight: 900 !important;
+    font-size: 13px !important;
+}
+
+/* Selectbox dentro del panel */
+div[data-testid="column"]:has(.menu-marker) [data-baseweb="select"] > div,
+div[data-testid="column"]:has(.menu-bg) [data-baseweb="select"] > div {
+    background: #ffffff !important;
+    border-radius: 12px !important;
+    min-height: 42px !important;
+    height: 42px !important;
+    border: 1px solid rgba(255,255,255,0.45) !important;
+}
+
+div[data-testid="column"]:has(.menu-marker) [data-baseweb="select"] span,
+div[data-testid="column"]:has(.menu-marker) [data-baseweb="select"] input,
+div[data-testid="column"]:has(.menu-bg) [data-baseweb="select"] span,
+div[data-testid="column"]:has(.menu-bg) [data-baseweb="select"] input {
+    color: #0f172a !important;
+    font-size: 13px !important;
+}
+
+/* Caja inferior */
+.menu-footer-box {
+    border: 1px solid rgba(147,197,253,0.35) !important;
+    background: rgba(2, 6, 23, 0.96) !important;
+    border-radius: 16px !important;
+    padding: 13px !important;
+    margin-top: 16px !important;
+    box-shadow: 0 10px 20px rgba(0,0,0,0.40) !important;
+    position: relative !important;
+    z-index: 3 !important;
+}
+
+.menu-info {
+    color: #ffffff !important;
+    font-size: 12.5px !important;
+    line-height: 1.68 !important;
+    margin-top: 0px !important;
+    font-weight: 850 !important;
+}
+
+.menu-info b {
+    color: #93c5fd !important;
+    font-weight: 950 !important;
+}
+
+/* =========================================================
+   CONTENIDO PRINCIPAL
+   ========================================================= */
+
+.title-main {
+    font-size: 42px;
+    font-weight: 950;
+    color: #0f172a;
+    margin-top: 0px !important;
+    margin-bottom: 0px !important;
+    padding-top: 0px !important;
+    padding-bottom: 0px !important;
+    line-height: 1.05;
+}
+
+.header-logo-box {
+    background: transparent !important;
+    border: none !important;
+    border-radius: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+    text-align: right !important;
+    margin-top: 0px !important;
+}
+
+.header-logo-box img {
+    width: 170px !important;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+
+.header-separador {
+    height: 20px;
+}
+
+.kpi-card {
+    background: white;
+    border: 1px solid #dbe3ef;
+    border-radius: 20px;
+    padding: 20px;
+    min-height: 132px;
+    box-shadow: 0 10px 26px rgba(15, 23, 42, 0.065);
+}
+
+.kpi-icon {
+    width: 54px;
+    height: 54px;
+    border-radius: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 26px;
+    margin-bottom: 12px;
+}
+
+.kpi-title {
+    font-size: 13px;
+    color: #475569;
+    font-weight: 900;
+}
+
+.kpi-value {
+    font-size: 26px;
+    font-weight: 950;
+    color: #0f172a;
+    margin-top: 7px;
+}
+
+.kpi-sub {
+    font-size: 12px;
+    color: #64748b;
+    margin-top: 7px;
+}
+
+.panel-title {
+    color: #0f172a;
+    font-weight: 950;
+    font-size: 19px;
+    margin-top: 20px;
+    margin-bottom: 10px;
+}
+
+.next-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid #e2e8f0;
+    padding: 6px 0;
+    min-height: 44px;
+}
+
+.next-title {
+    font-weight: 950;
+    color: #0f172a;
+    font-size: 12px;
+    line-height: 1.15;
+}
+
+.next-sub {
+    color: #64748b;
+    font-size: 10.5px;
+    margin-top: 1px;
+    line-height: 1.15;
+}
+
+.badge-days {
+    background: #fff7ed;
+    color: #f97316;
+    border: 1px solid #fed7aa;
+    padding: 4px 7px;
+    border-radius: 999px;
+    font-weight: 950;
+    font-size: 10px;
+    white-space: nowrap;
+}
+
+.equipo-card {
+    background: #ffffff;
+    border: 1px solid #dbe3ef;
+    border-radius: 18px;
+    padding: 13px;
+    box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
+    min-height: 282px;
+    box-sizing: border-box;
+    overflow: hidden;
+}
+
+.equipo-img {
+    width: 100%;
+    height: 132px;
+    object-fit: cover;
+    border-radius: 14px;
+    border: 1px solid #e2e8f0;
+    margin-bottom: 10px;
+    background: #f1f5f9;
+    display: block;
+}
+
+.equipo-img-placeholder {
+    width: 100%;
+    height: 132px;
+    border-radius: 14px;
+    border: 1px dashed #cbd5e1;
+    background: #f8fafc;
+    color: #64748b;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 38px;
+    margin-bottom: 10px;
+    box-sizing: border-box;
+}
+
+.equipo-nombre {
+    font-weight: 950;
+    color: #0f172a;
+    font-size: 16px;
+    margin-bottom: 3px;
+}
+
+.equipo-sub {
+    color: #64748b;
+    font-size: 13px;
+    margin-top: 4px;
+    line-height: 1.25;
+}
+
+.estado-ok {
+    color: #22c55e;
+    font-size: 12px;
+    font-weight: 950;
+    margin-top: 8px;
+}
+
+.estado-alerta {
+    color: #f59e0b;
+    font-size: 12px;
+    font-weight: 950;
+    margin-top: 8px;
+}
+
+.estado-rojo {
+    color: #ef4444;
+    font-size: 12px;
+    font-weight: 950;
+    margin-top: 8px;
+}
+
+.progress-bg {
+    width: 100%;
+    height: 7px;
+    background: #e2e8f0;
+    border-radius: 999px;
+    margin-top: 9px;
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 7px;
+    border-radius: 999px;
+    background-color: var(--barra-color, #94a3b8) !important;
+}
+
+[data-testid="stDataFrame"] {
+    border: 1px solid #dbe3ef;
+    border-radius: 13px;
+    overflow: hidden;
+}
+
+/* Selectbox global */
+div[data-baseweb="select"] > div {
+    background: white !important;
+    border: 1px solid #dbe3ef !important;
+    border-radius: 12px !important;
+    min-height: 44px !important;
+}
+
+div[data-baseweb="select"] span,
+div[data-baseweb="select"] input {
+    color: #0f172a !important;
+}
+
+label {
+    color: #334155 !important;
+    font-weight: 850 !important;
+}
+
+.stButton button {
+    border-radius: 11px !important;
+    font-weight: 850 !important;
+    min-height: 44px !important;
+}
+
+
+/* =========================================================
+   AJUSTE FINAL: MENÚ IZQUIERDO MÁS LEGIBLE
+   ========================================================= */
+
+/* Fuerza los textos del menú a blanco, aunque Streamlit aplique estilos internos */
+div[data-testid="column"]:has(.menu-bg) div[role="radiogroup"] label,
+div[data-testid="column"]:has(.menu-bg) div[role="radiogroup"] label *,
+div[data-testid="column"]:has(.menu-marker) div[role="radiogroup"] label,
+div[data-testid="column"]:has(.menu-marker) div[role="radiogroup"] label * {
+    color: #ffffff !important;
+    opacity: 1 !important;
+    font-weight: 900 !important;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.75) !important;
+}
+
+/* Opción seleccionada con fondo azul para que destaque */
+div[data-testid="column"]:has(.menu-bg) div[role="radiogroup"] label:has(input:checked),
+div[data-testid="column"]:has(.menu-marker) div[role="radiogroup"] label:has(input:checked) {
+    background: rgba(37, 99, 235, 0.45) !important;
+    border: 1px solid rgba(147, 197, 253, 0.65) !important;
+}
+
+/* Radio button más visible */
+div[data-testid="column"]:has(.menu-bg) div[role="radiogroup"] input,
+div[data-testid="column"]:has(.menu-marker) div[role="radiogroup"] input {
+    accent-color: #38bdf8 !important;
+}
+
+/* Títulos de filtros Equipo / Año / Mes */
+div[data-testid="column"]:has(.menu-bg) label,
+div[data-testid="column"]:has(.menu-bg) label *,
+div[data-testid="column"]:has(.menu-marker) label,
+div[data-testid="column"]:has(.menu-marker) label * {
+    color: #e0f2fe !important;
+    opacity: 1 !important;
+    font-weight: 900 !important;
+}
+
+
+/* =========================================================
+   CORRECCIÓN FINAL: TEXTO DEL MENÚ IZQUIERDO 100% LEGIBLE
+   Streamlit a veces aplica opacidad/color interno a los radios.
+   Este bloque fuerza blanco real en menú, filtros y estados.
+   ========================================================= */
+
+/* Radio menú: texto, emojis y contenedores internos */
+div[data-testid="column"]:has(.menu-bg) div[data-testid="stRadio"],
+div[data-testid="column"]:has(.menu-bg) div[data-testid="stRadio"] *,
+div[data-testid="column"]:has(.menu-marker) div[data-testid="stRadio"],
+div[data-testid="column"]:has(.menu-marker) div[data-testid="stRadio"] * {
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    opacity: 1 !important;
+    filter: none !important;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.65) !important;
+}
+
+/* Cada opción del menú */
+div[data-testid="column"]:has(.menu-bg) div[data-testid="stRadio"] label,
+div[data-testid="column"]:has(.menu-marker) div[data-testid="stRadio"] label {
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    opacity: 1 !important;
+    font-weight: 950 !important;
+    font-size: 15px !important;
+    line-height: 1.25 !important;
+}
+
+/* Texto específico dentro de cada opción */
+div[data-testid="column"]:has(.menu-bg) div[data-testid="stRadio"] label p,
+div[data-testid="column"]:has(.menu-bg) div[data-testid="stRadio"] label span,
+div[data-testid="column"]:has(.menu-bg) div[data-testid="stRadio"] label div,
+div[data-testid="column"]:has(.menu-marker) div[data-testid="stRadio"] label p,
+div[data-testid="column"]:has(.menu-marker) div[data-testid="stRadio"] label span,
+div[data-testid="column"]:has(.menu-marker) div[data-testid="stRadio"] label div {
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    opacity: 1 !important;
+    font-weight: 950 !important;
+    font-size: 15px !important;
+}
+
+/* Opción seleccionada más marcada */
+div[data-testid="column"]:has(.menu-bg) div[data-testid="stRadio"] label:has(input:checked),
+div[data-testid="column"]:has(.menu-marker) div[data-testid="stRadio"] label:has(input:checked) {
+    background: rgba(37, 99, 235, 0.42) !important;
+    border: 1px solid rgba(147, 197, 253, 0.65) !important;
+}
+
+/* Etiquetas de filtros: Equipo, Año y Mes */
+div[data-testid="column"]:has(.menu-bg) div[data-testid="stSelectbox"] label,
+div[data-testid="column"]:has(.menu-bg) div[data-testid="stSelectbox"] label *,
+div[data-testid="column"]:has(.menu-marker) div[data-testid="stSelectbox"] label,
+div[data-testid="column"]:has(.menu-marker) div[data-testid="stSelectbox"] label * {
+    color: #dbeafe !important;
+    -webkit-text-fill-color: #dbeafe !important;
+    opacity: 1 !important;
+    font-weight: 950 !important;
+    font-size: 13.5px !important;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.55) !important;
+}
+
+/* Texto dentro de los filtros desplegables */
+div[data-testid="column"]:has(.menu-bg) [data-baseweb="select"] *,
+div[data-testid="column"]:has(.menu-marker) [data-baseweb="select"] * {
+    color: #0f172a !important;
+    -webkit-text-fill-color: #0f172a !important;
+    opacity: 1 !important;
+    font-weight: 800 !important;
+}
+
+
+
+/* =========================================================
+   MENÚ HTML PERSONALIZADO - LETRAS BLANCAS Y LEGIBLES
+   ========================================================= */
+
+.menu-nav {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 7px !important;
+    margin-top: 6px !important;
+    margin-bottom: 12px !important;
+    position: relative !important;
+    z-index: 20 !important;
+}
+
+.menu-nav-item,
+.menu-nav-item:link,
+.menu-nav-item:visited {
+    display: block !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+    padding: 10px 12px !important;
+    border-radius: 13px !important;
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    opacity: 1 !important;
+    font-size: 16px !important;
+    font-weight: 950 !important;
+    line-height: 1.25 !important;
+    text-decoration: none !important;
+    letter-spacing: 0.10px !important;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.85) !important;
+    background: rgba(15, 23, 42, 0.30) !important;
+    border: 1px solid rgba(147, 197, 253, 0.20) !important;
+}
+
+.menu-nav-item:hover {
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    background: rgba(37, 99, 235, 0.40) !important;
+    border: 1px solid rgba(147, 197, 253, 0.60) !important;
+    text-decoration: none !important;
+}
+
+.menu-nav-item.active {
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    background: linear-gradient(135deg, rgba(37, 99, 235, 0.95), rgba(14, 165, 233, 0.78)) !important;
+    border: 1px solid rgba(191, 219, 254, 0.85) !important;
+    box-shadow: 0 8px 18px rgba(37, 99, 235, 0.35) !important;
+}
+
+/* Refuerzo para que Streamlit no pinte los links del menú en gris */
+div[data-testid="column"] .menu-nav a,
+div[data-testid="column"] .menu-nav a *,
+.stApp .menu-nav a,
+.stApp .menu-nav a * {
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    opacity: 1 !important;
+}
+
+
+/* =========================================================
+   MENÚ CON BOTONES STREAMLIT - NO ABRE PESTAÑAS NUEVAS
+   ========================================================= */
+.menu-botones-title {
+    display: none !important;
+}
+
+div[data-testid="column"]:has(.menu-bg) div[data-testid="stButton"],
+div[data-testid="column"]:has(.menu-marker) div[data-testid="stButton"] {
+    width: 100% !important;
+    margin: 0 0 7px 0 !important;
+}
+
+div[data-testid="column"]:has(.menu-bg) div[data-testid="stButton"] > button,
+div[data-testid="column"]:has(.menu-marker) div[data-testid="stButton"] > button {
+    width: 100% !important;
+    min-height: 46px !important;
+    height: 46px !important;
+    justify-content: flex-start !important;
+    text-align: left !important;
+    border-radius: 13px !important;
+    padding: 10px 12px !important;
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    background: rgba(15, 23, 42, 0.30) !important;
+    border: 1px solid rgba(147, 197, 253, 0.20) !important;
+    font-size: 16px !important;
+    font-weight: 950 !important;
+    line-height: 1.25 !important;
+    letter-spacing: 0.10px !important;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.85) !important;
+    box-shadow: none !important;
+}
+
+div[data-testid="column"]:has(.menu-bg) div[data-testid="stButton"] > button:hover,
+div[data-testid="column"]:has(.menu-marker) div[data-testid="stButton"] > button:hover {
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    background: rgba(37, 99, 235, 0.40) !important;
+    border: 1px solid rgba(147, 197, 253, 0.60) !important;
+}
+
+/* Botón deshabilitado = página actual seleccionada */
+div[data-testid="column"]:has(.menu-bg) div[data-testid="stButton"] > button:disabled,
+div[data-testid="column"]:has(.menu-marker) div[data-testid="stButton"] > button:disabled {
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    opacity: 1 !important;
+    background: linear-gradient(135deg, rgba(37, 99, 235, 0.95), rgba(14, 165, 233, 0.78)) !important;
+    border: 1px solid rgba(191, 219, 254, 0.85) !important;
+    box-shadow: 0 8px 18px rgba(37, 99, 235, 0.35) !important;
+}
+
+div[data-testid="column"]:has(.menu-bg) div[data-testid="stButton"] > button:disabled *,
+div[data-testid="column"]:has(.menu-marker) div[data-testid="stButton"] > button:disabled * {
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    opacity: 1 !important;
+}
+
+
+
+/* =========================================================
+   AJUSTE FINAL: MENÚ SIN SOBRESALIR DEL PANEL IZQUIERDO
+   ========================================================= */
+:root {
+    --menu-panel-width: 270px;
+    --menu-inner-width: 244px;
+}
+
+.menu-bg {
+    width: var(--menu-panel-width) !important;
+    max-width: var(--menu-panel-width) !important;
+    overflow: hidden !important;
+}
+
+/* La columna izquierda queda limitada al ancho real del panel */
+div[data-testid="column"]:has(.menu-bg),
+div[data-testid="column"]:has(.menu-marker),
+div[data-testid="column"]:has(.menu-brand) {
+    width: var(--menu-panel-width) !important;
+    max-width: var(--menu-panel-width) !important;
+    min-width: var(--menu-panel-width) !important;
+    overflow: hidden !important;
+    box-sizing: border-box !important;
+    padding-left: 10px !important;
+    padding-right: 10px !important;
+}
+
+.menu-panel-content,
+.menu-nav,
+.menu-line,
+.menu-footer-box,
+div[data-testid="column"]:has(.menu-bg) div[data-testid="stSelectbox"],
+div[data-testid="column"]:has(.menu-marker) div[data-testid="stSelectbox"] {
+    width: var(--menu-inner-width) !important;
+    max-width: var(--menu-inner-width) !important;
+    min-width: 0 !important;
+    box-sizing: border-box !important;
+    overflow: hidden !important;
+}
+
+.menu-nav {
+    padding-right: 0 !important;
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+}
+
+.menu-nav-item,
+.menu-nav-item:link,
+.menu-nav-item:visited,
+.menu-nav-item:hover,
+.menu-nav-item.active {
+    width: var(--menu-inner-width) !important;
+    max-width: var(--menu-inner-width) !important;
+    min-width: 0 !important;
+    box-sizing: border-box !important;
+    overflow: hidden !important;
+    white-space: nowrap !important;
+    text-overflow: ellipsis !important;
+    padding-left: 12px !important;
+    padding-right: 10px !important;
+}
+
+/* Selectores Equipo / Año / Mes dentro del ancho del panel */
+div[data-testid="column"]:has(.menu-bg) [data-baseweb="select"],
+div[data-testid="column"]:has(.menu-marker) [data-baseweb="select"],
+div[data-testid="column"]:has(.menu-bg) [data-baseweb="select"] > div,
+div[data-testid="column"]:has(.menu-marker) [data-baseweb="select"] > div {
+    width: var(--menu-inner-width) !important;
+    max-width: var(--menu-inner-width) !important;
+    min-width: 0 !important;
+    box-sizing: border-box !important;
+}
+
+.menu-footer-box {
+    margin-right: 0 !important;
+}
+
+/* Evita que cualquier bloque interno del menú se salga hacia la página principal */
+div[data-testid="column"]:has(.menu-bg) *,
+div[data-testid="column"]:has(.menu-marker) * {
+    max-width: 100% !important;
+}
+
+/* En móviles mantiene el panel fijo sin invadir el contenido */
+@media (max-width: 900px) {
+    :root {
+        --menu-panel-width: 270px;
+        --menu-inner-width: 244px;
+    }
+}
+
+
+
+/* =========================================================
+   CORRECCIÓN 3.3: MENÚ VISIBLE Y ESTRUCTURA FIJA
+   ========================================================= */
+:root {
+    --menu-panel-width: 320px !important;
+    --menu-inner-width: 286px !important;
+    --content-gap: 18px !important;
+}
+
+/* Ancho fijo del panel izquierdo completo */
+.menu-bg {
+    width: var(--menu-panel-width) !important;
+    max-width: var(--menu-panel-width) !important;
+    min-width: var(--menu-panel-width) !important;
+    z-index: 1 !important;
+}
+
+/* Columna izquierda fija: evita que el contenido se monte encima al hacer zoom */
+div[data-testid="column"]:has(.menu-bg),
+div[data-testid="column"]:has(.menu-marker),
+div[data-testid="column"]:has(.menu-brand) {
+    flex: 0 0 var(--menu-panel-width) !important;
+    width: var(--menu-panel-width) !important;
+    min-width: var(--menu-panel-width) !important;
+    max-width: var(--menu-panel-width) !important;
+    padding-left: 12px !important;
+    padding-right: 12px !important;
+    overflow: hidden !important;
+    z-index: 10 !important;
+}
+
+/* Columna derecha: queda separada del menú y no se mete debajo */
+div[data-testid="column"]:has(.menu-bg) + div[data-testid="column"],
+div[data-testid="column"]:has(.menu-marker) + div[data-testid="column"],
+div[data-testid="column"]:has(.menu-brand) + div[data-testid="column"] {
+    flex: 1 1 auto !important;
+    min-width: 980px !important;
+    padding-left: var(--content-gap) !important;
+    box-sizing: border-box !important;
+    position: relative !important;
+    z-index: 2 !important;
+}
+
+/* Mantiene el tablero ordenado; si la ventana es muy angosta aparece scroll horizontal en vez de montar elementos */
+.main .block-container,
+.block-container {
+    min-width: 1360px !important;
+    overflow-x: auto !important;
+}
+
+/* Título más estable al cambiar zoom */
+.title-main {
+    font-size: clamp(30px, 2.25vw, 42px) !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+}
+
+.header-logo-box img {
+    width: 150px !important;
+    max-width: 150px !important;
+}
+
+/* Botones del menú: siempre oscuros, nunca blancos */
+div[data-testid="column"]:has(.menu-bg) div[data-testid="stButton"] button,
+div[data-testid="column"]:has(.menu-marker) div[data-testid="stButton"] button {
+    width: 100% !important;
+    min-height: 46px !important;
+    height: auto !important;
+    justify-content: flex-start !important;
+    text-align: left !important;
+    border-radius: 13px !important;
+    padding: 10px 12px !important;
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    background: rgba(15, 23, 42, 0.52) !important;
+    border: 1px solid rgba(147, 197, 253, 0.24) !important;
+    font-size: 15px !important;
+    font-weight: 950 !important;
+    line-height: 1.25 !important;
+    letter-spacing: 0.05px !important;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.85) !important;
+    box-shadow: none !important;
+    white-space: normal !important;
+}
+
+div[data-testid="column"]:has(.menu-bg) div[data-testid="stButton"] button:hover,
+div[data-testid="column"]:has(.menu-marker) div[data-testid="stButton"] button:hover {
+    background: rgba(37, 99, 235, 0.55) !important;
+    border-color: rgba(191, 219, 254, 0.70) !important;
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+}
+
+/* Item actualmente seleccionado: HTML propio, no botón deshabilitado */
+.menu-active-item {
+    width: var(--menu-inner-width) !important;
+    max-width: var(--menu-inner-width) !important;
+    box-sizing: border-box !important;
+    padding: 12px 12px !important;
+    border-radius: 13px !important;
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    background: linear-gradient(135deg, #2563eb 0%, #0ea5e9 100%) !important;
+    border: 1px solid rgba(219, 234, 254, 0.95) !important;
+    box-shadow: 0 8px 18px rgba(37, 99, 235, 0.38) !important;
+    font-size: 15.5px !important;
+    font-weight: 950 !important;
+    line-height: 1.25 !important;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.70) !important;
+    margin-bottom: 7px !important;
+    white-space: normal !important;
+}
+
+.menu-active-item * {
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+}
+
+/* Anchos internos del menú */
+.menu-panel-content,
+.menu-nav,
+.menu-line,
+.menu-footer-box,
+div[data-testid="column"]:has(.menu-bg) div[data-testid="stButton"],
+div[data-testid="column"]:has(.menu-marker) div[data-testid="stButton"],
+div[data-testid="column"]:has(.menu-bg) div[data-testid="stSelectbox"],
+div[data-testid="column"]:has(.menu-marker) div[data-testid="stSelectbox"] {
+    width: var(--menu-inner-width) !important;
+    max-width: var(--menu-inner-width) !important;
+}
+
+/* Ajuste especial para textos largos del menú */
+.menu-brand {
+    width: var(--menu-inner-width) !important;
+}
+.menu-title {
+    font-size: 13px !important;
+}
+.menu-subtitle {
+    font-size: 11px !important;
+}
+
+/* Selectores dentro del panel: no se salen */
+div[data-testid="column"]:has(.menu-bg) [data-baseweb="select"],
+div[data-testid="column"]:has(.menu-marker) [data-baseweb="select"],
+div[data-testid="column"]:has(.menu-bg) [data-baseweb="select"] > div,
+div[data-testid="column"]:has(.menu-marker) [data-baseweb="select"] > div {
+    width: var(--menu-inner-width) !important;
+    max-width: var(--menu-inner-width) !important;
+}
+
+/* Tablas y gráficos contenidos dentro de su bloque */
+[data-testid="stDataFrame"],
+[data-testid="stPlotlyChart"] {
+    max-width: 100% !important;
+    overflow: hidden !important;
+}
+
+
+
+/* =========================================================
+   CORRECCIÓN 3.4: MENÚ EN SIDEBAR FIJO Y RESPONSIVE
+   ========================================================= */
+:root {
+    --menu-panel-width: 320px !important;
+    --menu-inner-width: 286px !important;
+}
+
+/* Sidebar oficial de Streamlit: estable al agrandar/achicar o usar zoom */
+section[data-testid="stSidebar"] {
+    display: block !important;
+    visibility: visible !important;
+    width: var(--menu-panel-width) !important;
+    min-width: var(--menu-panel-width) !important;
+    max-width: var(--menu-panel-width) !important;
+    background: #020617 !important;
+    border-right: 1px solid rgba(147, 197, 253, 0.28) !important;
+    box-shadow: 10px 0 24px rgba(15, 23, 42, 0.28) !important;
+    overflow: hidden !important;
+}
+
+section[data-testid="stSidebar"] > div {
+    background: #020617 !important;
+    width: var(--menu-panel-width) !important;
+    padding: 12px 14px 18px 14px !important;
+    box-sizing: border-box !important;
+    overflow-x: hidden !important;
+}
+
+section[data-testid="stSidebar"] .menu-bg {
+    display: none !important;
+}
+
+section[data-testid="stSidebar"] .menu-panel-content,
+section[data-testid="stSidebar"] .menu-line,
+section[data-testid="stSidebar"] .menu-footer-box,
+section[data-testid="stSidebar"] div[data-testid="stButton"],
+section[data-testid="stSidebar"] div[data-testid="stSelectbox"] {
+    width: var(--menu-inner-width) !important;
+    max-width: var(--menu-inner-width) !important;
+    box-sizing: border-box !important;
+}
+
+section[data-testid="stSidebar"] .menu-brand {
+    display: flex !important;
+    align-items: center !important;
+    gap: 12px !important;
+    margin: 0 0 18px 0 !important;
+    width: var(--menu-inner-width) !important;
+}
+
+section[data-testid="stSidebar"] .menu-title {
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    font-size: 13px !important;
+    font-weight: 950 !important;
+    line-height: 1.15 !important;
+    letter-spacing: 0.35px !important;
+    text-shadow: 0 2px 5px rgba(0,0,0,0.75) !important;
+}
+
+section[data-testid="stSidebar"] .menu-subtitle {
+    color: #bfdbfe !important;
+    -webkit-text-fill-color: #bfdbfe !important;
+    font-size: 11px !important;
+    margin-top: 6px !important;
+    font-weight: 950 !important;
+}
+
+section[data-testid="stSidebar"] .menu-line {
+    border: 0 !important;
+    border-top: 1px solid rgba(191, 219, 254, 0.25) !important;
+    margin: 14px 0 16px 0 !important;
+}
+
+/* Botones del menú: visibles y dentro del panel */
+section[data-testid="stSidebar"] div[data-testid="stButton"] button {
+    width: var(--menu-inner-width) !important;
+    max-width: var(--menu-inner-width) !important;
+    min-height: 48px !important;
+    height: auto !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: flex-start !important;
+    text-align: left !important;
+    border-radius: 13px !important;
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    background: rgba(15, 23, 42, 0.62) !important;
+    border: 1px solid rgba(147, 197, 253, 0.26) !important;
+    box-shadow: none !important;
+    font-size: 15px !important;
+    font-weight: 950 !important;
+    line-height: 1.25 !important;
+    letter-spacing: 0.05px !important;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.85) !important;
+    margin-bottom: 7px !important;
+    padding: 10px 12px !important;
+    white-space: normal !important;
+    box-sizing: border-box !important;
+}
+
+section[data-testid="stSidebar"] div[data-testid="stButton"] button:hover {
+    background: rgba(37, 99, 235, 0.55) !important;
+    border-color: rgba(191, 219, 254, 0.70) !important;
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+}
+
+section[data-testid="stSidebar"] .menu-active-item {
+    width: var(--menu-inner-width) !important;
+    max-width: var(--menu-inner-width) !important;
+    box-sizing: border-box !important;
+    padding: 12px 12px !important;
+    border-radius: 13px !important;
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    background: linear-gradient(135deg, #2563eb 0%, #0ea5e9 100%) !important;
+    border: 1px solid rgba(219, 234, 254, 0.95) !important;
+    box-shadow: 0 8px 18px rgba(37, 99, 235, 0.38) !important;
+    font-size: 15.5px !important;
+    font-weight: 950 !important;
+    line-height: 1.25 !important;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.70) !important;
+    margin-bottom: 7px !important;
+    white-space: normal !important;
+}
+
+/* Filtros visibles dentro del panel izquierdo */
+section[data-testid="stSidebar"] div[data-testid="stSelectbox"] label,
+section[data-testid="stSidebar"] div[data-testid="stSelectbox"] label * {
+    color: #dbeafe !important;
+    -webkit-text-fill-color: #dbeafe !important;
+    opacity: 1 !important;
+    font-weight: 950 !important;
+    font-size: 13px !important;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.55) !important;
+}
+
+section[data-testid="stSidebar"] [data-baseweb="select"],
+section[data-testid="stSidebar"] [data-baseweb="select"] > div {
+    width: var(--menu-inner-width) !important;
+    max-width: var(--menu-inner-width) !important;
+    min-width: 0 !important;
+    box-sizing: border-box !important;
+}
+
+section[data-testid="stSidebar"] [data-baseweb="select"] > div {
+    background: #ffffff !important;
+    border-radius: 12px !important;
+    min-height: 44px !important;
+    border: 1px solid rgba(255,255,255,0.45) !important;
+}
+
+section[data-testid="stSidebar"] [data-baseweb="select"] * {
+    color: #0f172a !important;
+    -webkit-text-fill-color: #0f172a !important;
+    font-weight: 800 !important;
+}
+
+section[data-testid="stSidebar"] .menu-footer-box {
+    border: 1px solid rgba(147,197,253,0.35) !important;
+    background: rgba(2, 6, 23, 0.96) !important;
+    border-radius: 16px !important;
+    padding: 13px !important;
+    margin-top: 18px !important;
+    box-shadow: 0 10px 20px rgba(0,0,0,0.40) !important;
+}
+
+section[data-testid="stSidebar"] .menu-info,
+section[data-testid="stSidebar"] .menu-info * {
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    font-size: 12.5px !important;
+    line-height: 1.68 !important;
+    font-weight: 850 !important;
+}
+
+section[data-testid="stSidebar"] .menu-info b {
+    color: #93c5fd !important;
+    -webkit-text-fill-color: #93c5fd !important;
+    font-weight: 950 !important;
+}
+
+/* Contenido principal estable: no se monta sobre el menú */
+.main .block-container,
+.block-container {
+    padding-top: 0rem !important;
+    padding-left: 1rem !important;
+    padding-right: 1rem !important;
+    max-width: none !important;
+    min-width: 1180px !important;
+    overflow-x: auto !important;
+}
+
+/* Mantiene las tarjetas y gráficos en orden cuando se cambia zoom */
+div[data-testid="stHorizontalBlock"] {
+    flex-wrap: nowrap !important;
+}
+
+.title-main {
+    font-size: clamp(30px, 2.2vw, 42px) !important;
+    white-space: nowrap !important;
+}
+
+.header-logo-box {
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+    padding: 0 !important;
+    text-align: right !important;
+}
+
+.header-logo-box img {
+    width: 170px !important;
+    max-width: 170px !important;
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+}
+
+
+
+/* =========================================================
+   AJUSTE 5.1: ENCABEZADO SUPERIOR FIJO Y PRÓXIMAS MANTENCIONES COMPACTO
+   ========================================================= */
+.main-fixed-header {
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 5000 !important;
+    width: 100% !important;
+    min-height: 64px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    gap: 18px !important;
+    padding: 7px 14px 7px 0 !important;
+    margin: 0 0 6px 0 !important;
+    background: rgba(238, 243, 249, 0.96) !important;
+    backdrop-filter: blur(7px) !important;
+    border-bottom: 1px solid rgba(203, 213, 225, 0.70) !important;
+    box-shadow: 0 7px 18px rgba(15, 23, 42, 0.055) !important;
+    box-sizing: border-box !important;
+}
+
+.main-fixed-title {
+    color: #0f172a !important;
+    font-size: clamp(31px, 2.35vw, 43px) !important;
+    font-weight: 950 !important;
+    line-height: 1.03 !important;
+    letter-spacing: -0.7px !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+}
+
+.main-fixed-logo {
+    flex: 0 0 auto !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: flex-end !important;
+}
+
+.main-fixed-logo img {
+    width: 170px !important;
+    max-width: 170px !important;
+    height: auto !important;
+    display: block !important;
+    border: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+}
+
+.main-fixed-header-spacer {
+    height: 10px !important;
+}
+
+.proximas-box {
+    width: 100% !important;
+    max-width: none !important;
+    min-width: 0 !important;
+    box-sizing: border-box !important;
+}
+
+.proximas-box .panel-title {
+    margin-top: 20px !important;
+    margin-bottom: 8px !important;
+    font-size: 18px !important;
+    white-space: nowrap !important;
+}
+
+.proximas-box .next-item {
+    width: 100% !important;
+    max-width: none !important;
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto !important;
+    column-gap: 8px !important;
+    align-items: center !important;
+    justify-content: start !important;
+    padding: 5px 0 !important;
+    min-height: 42px !important;
+}
+
+.proximas-box .next-title {
+    font-size: 11.7px !important;
+    line-height: 1.12 !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+}
+
+.proximas-box .next-sub {
+    font-size: 10px !important;
+    line-height: 1.10 !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+}
+
+.proximas-box .badge-days {
+    justify-self: end !important;
+    padding: 4px 6px !important;
+    font-size: 9.6px !important;
+    min-width: 46px !important;
+    text-align: center !important;
+}
+
+.proximas-box .badge-days.badge-overdue {
+    background: #fef2f2 !important;
+    color: #dc2626 !important;
+    border: 1px solid #fca5a5 !important;
+    font-weight: 950 !important;
+}
+
+/* =========================================================
+   AJUSTE 5.2: TÍTULO SUPERIOR SIN FRANJA DE FONDO
+   - El encabezado queda sobre el fondo/sello de agua.
+   - Se sube hacia la parte superior.
+   - Se elimina caja, sombra, borde y blur detrás del título.
+   ========================================================= */
+.main .block-container,
+.block-container,
+section.main > div {
+    padding-top: 0px !important;
+    margin-top: 0px !important;
+}
+
+.main-fixed-header {
+    position: sticky !important;
+    top: 0px !important;
+    z-index: 5000 !important;
+    min-height: 54px !important;
+    height: 54px !important;
+    padding: 0px 14px 0px 0px !important;
+    margin: -56px 0 4px 0 !important;
+    background: transparent !important;
+    background-color: transparent !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    border: 0 !important;
+    border-bottom: 0 !important;
+    box-shadow: none !important;
+}
+
+.main-fixed-title {
+    background: transparent !important;
+    background-color: transparent !important;
+    color: #0f172a !important;
+    font-size: clamp(32px, 2.35vw, 43px) !important;
+    font-weight: 950 !important;
+    line-height: 1 !important;
+    text-shadow: none !important;
+}
+
+.main-fixed-logo {
+    background: transparent !important;
+    background-color: transparent !important;
+}
+
+.main-fixed-logo img {
+    width: 170px !important;
+    max-width: 170px !important;
+    background: transparent !important;
+    background-color: transparent !important;
+    box-shadow: none !important;
+}
+
+.main-fixed-header-spacer {
+    height: 0px !important;
+}
+
+</style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+# =========================================================
+# CARGA DE DATOS
+# =========================================================
+
+@st.cache_data(ttl=CACHE_GOOGLE_SHEETS_SEGUNDOS, show_spinner="Actualizando datos desde Google Sheets...")
+def cargar_datos():
+    datos = {}
+
+    for hoja in HOJAS_GOOGLE_SHEETS:
+        datos[hoja] = leer_hoja_google_sheet(hoja)
+
+    # La hoja EQUIPOS es obligatoria porque alimenta el panel principal.
+    if datos.get("EQUIPOS", pd.DataFrame()).empty:
+        raise FileNotFoundError(
+            "No se pudo leer la hoja EQUIPOS desde Google Sheets. "
+            "Revisa que el archivo esté compartido como lector y que la pestaña se llame EQUIPOS."
+        )
+
+    return GOOGLE_SHEET_URL, datos
+
+
+def preparar_equipos(df):
+    equipos = df.copy()
+
+    # Compatibilidad con cambios de nombres en la hoja EQUIPOS.
+    # Evita que se repitan datos en la tabla cuando la planilla trae columnas similares.
+    # Ejemplos detectados: Patente / Patente_Codigo y Km_Hmtro_Actual / Km_Horometro_Actual.
+    if "Patente" in equipos.columns:
+        if "Patente_Codigo" not in equipos.columns:
+            equipos["Patente_Codigo"] = equipos["Patente"]
+        else:
+            patente_codigo_vacia = (
+                equipos["Patente_Codigo"].isna()
+                | equipos["Patente_Codigo"].astype(str).str.strip().isin(["", "0", "0.0", "nan", "None"])
+            )
+            equipos.loc[patente_codigo_vacia, "Patente_Codigo"] = equipos.loc[patente_codigo_vacia, "Patente"]
+
+    if "Km_Hmtro_Actual" in equipos.columns:
+        if "Km_Horometro_Actual" not in equipos.columns:
+            equipos["Km_Horometro_Actual"] = equipos["Km_Hmtro_Actual"]
+        else:
+            km_normal = equipos["Km_Horometro_Actual"].apply(limpiar_numero)
+            km_abreviado = equipos["Km_Hmtro_Actual"].apply(limpiar_numero)
+            equipos["Km_Horometro_Actual"] = km_normal.where(km_normal > 0, km_abreviado)
+
+    columnas_texto = [
+        "ID_Equipo",
+        "Equipo",
+        "Patente_Codigo",
+        "Tipo_Equipo",
+        "Marca",
+        "Modelo",
+        "Estado",
+        "Área",
+        "Responsable",
+        "Unidad_Control",
+        "Frecuencia_Mantencion",
+        "Observacion",
+        "Imagen",
+    ]
+
+    for columna in columnas_texto:
+        equipos = asegurar_columna(equipos, columna, "")
+
+    equipos = asegurar_columna(equipos, "Fecha_Ingreso", pd.NaT)
+    equipos = asegurar_columna(equipos, "Proxima_Mantencion", pd.NaT)
+
+    for columna in ["Año", "Km_Horometro_Actual"]:
+        equipos = asegurar_columna(equipos, columna, 0)
+        equipos[columna] = equipos[columna].apply(limpiar_numero)
+
+    equipos = preparar_fecha_columnas(
+        equipos,
+        [
+            "Fecha_Ingreso",
+        ],
+    )
+    equipos["Proxima_Mantencion"] = equipos["Proxima_Mantencion"].apply(limpiar_numero)
+
+    equipos["Equipo"] = equipos["Equipo"].fillna("Sin equipo").astype(str).str.strip()
+    equipos["Estado"] = equipos["Estado"].fillna("Sin estado").astype(str).str.strip()
+    equipos = equipos[equipos["Equipo"] != ""].copy()
+    equipos = aplicar_unidad_control_por_equipo(equipos)
+
+    return equipos
+
+
+def preparar_mantenciones(df):
+    mant = df.copy()
+
+    columnas_texto = [
+        "ID_Mantencion",
+        "ID_Equipo",
+        "Equipo",
+        "Tipo_Mantencion",
+        "Categoria",
+        "Proveedor",
+        "Responsable",
+        "Descripcion",
+        "Estado_Mantencion",
+        "Documento_Respaldo",
+        "Observacion",
+    ]
+
+    for columna in columnas_texto:
+        mant = asegurar_columna(mant, columna, "")
+
+    mant = asegurar_columna(mant, "Fecha", pd.NaT)
+    mant = asegurar_columna(mant, "Costo_CLP", 0)
+    mant["Costo_CLP"] = mant["Costo_CLP"].apply(limpiar_numero)
+
+    mant = preparar_fecha_columnas(
+        mant,
+        [
+            "Fecha",
+        ],
+    )
+
+    # La hoja MANTENCIONES ya no utiliza la columna Proxima_Mantencion.
+    # La próxima mantención oficial se calcula exclusivamente desde la hoja EQUIPOS.
+    mant = mant.drop(columns=["Proxima_Mantencion"], errors="ignore")
+
+    mant = preparar_periodo(mant)
+
+    mant["Equipo"] = mant["Equipo"].fillna("").astype(str).str.strip()
+    mant["Tipo_Mantencion"] = mant["Tipo_Mantencion"].fillna("Sin tipo").astype(str).str.strip().apply(normalizar_tipo_mantencion)
+    mant["Mantencion"] = mant["Tipo_Mantencion"]
+    mant["Estado_Mantencion"] = mant["Estado_Mantencion"].fillna("Sin estado").astype(str).str.strip()
+
+    # Elimina filas vacías que vienen desde el formato de Excel y generaban registros $0 / Sin estado.
+    mant = mant[
+        (mant["Equipo"].str.lower().isin(["", "nan", "none"]) == False)
+        | (mant["Fecha"].notna())
+        | (mant["Costo_CLP"] > 0)
+    ].copy()
+
+    return mant
+
+
+def preparar_gastos(df):
+    gastos = df.copy()
+
+    columnas_texto = [
+        "ID_Gasto",
+        "ID_Equipo",
+        "Equipo",
+        "Mantencion",
+        "Tipo_Gasto",
+        "Descripcion",
+        "Proveedor",
+        "Documento_Respaldo",
+        "Observacion",
+    ]
+
+    for columna in columnas_texto:
+        gastos = asegurar_columna(gastos, columna, "")
+
+    # En algunas hojas el encabezado Mantencion se normaliza como Tipo_Mantencion.
+    # Para gastos adicionales lo usamos como columna auxiliar de clasificación.
+    if "Tipo_Mantencion" in gastos.columns:
+        mant_aux = gastos["Tipo_Mantencion"].fillna("").astype(str).str.strip()
+        gastos.loc[gastos["Mantencion"].fillna("").astype(str).str.strip().isin(["", "nan", "None", "none"]), "Mantencion"] = mant_aux
+
+    gastos = asegurar_columna(gastos, "Costo_CLP", 0)
+    gastos["Costo_CLP"] = gastos["Costo_CLP"].apply(limpiar_numero)
+
+    gastos = preparar_fecha_columnas(gastos, ["Fecha"])
+    gastos = preparar_periodo(gastos)
+
+    gastos["Equipo"] = gastos["Equipo"].fillna("").astype(str).str.strip()
+    gastos["Tipo_Gasto"] = gastos["Tipo_Gasto"].fillna("Sin tipo").astype(str).str.strip().apply(normalizar_tipo_gasto)
+    gastos.loc[gastos["Tipo_Gasto"].str.lower().isin(["", "nan", "none", "nat", "0"]), "Tipo_Gasto"] = "Sin tipo"
+    gastos["Mantencion"] = gastos["Mantencion"].fillna("Sin tipo").astype(str).str.strip().apply(normalizar_tipo_mantencion)
+
+    if "Descripcion" not in gastos.columns:
+        gastos["Descripcion"] = ""
+    gastos["Clasificacion_Costo"] = gastos.apply(
+        lambda x: categoria_costo_gasto(x.get("Tipo_Gasto", ""), x.get("Descripcion", ""), x.get("Mantencion", "")),
+        axis=1,
+    )
+
+    # Elimina filas vacías que vienen desde el formato de Excel y generaban registros $0 / Sin mes.
+    gastos = gastos[
+        (gastos["Equipo"].str.lower().isin(["", "nan", "none"]) == False)
+        | (gastos["Fecha"].notna())
+        | (gastos["Costo_CLP"] > 0)
+    ].copy()
+
+    return gastos
+
+
+def preparar_checklist(df):
+    checklist = df.copy()
+
+    columnas_texto = [
+        "ID_Checklist",
+        "ID_Equipo",
+        "Equipo",
+        "Operador",
+        "Estado_Checklist",
+        "Observacion",
+        "Accion_Requerida",
+        "Responsable",
+        "Estado_Cierre",
+    ]
+
+    for columna in columnas_texto:
+        checklist = asegurar_columna(checklist, columna, "")
+
+    checklist = asegurar_columna(checklist, "Km_Horometro", 0)
+    checklist["Km_Horometro"] = checklist["Km_Horometro"].apply(limpiar_numero)
+
+    checklist = preparar_fecha_columnas(
+        checklist,
+        [
+            "Fecha",
+            "Fecha_Cierre",
+        ],
+    )
+
+    checklist = preparar_periodo(checklist)
+    checklist["Equipo"] = checklist["Equipo"].fillna("").astype(str).str.strip()
+
+    return checklist
+
+
+def preparar_combustible(df):
+    combustible = df.copy()
+
+    columnas_texto = [
+        "ID_Registro",
+        "ID_Equipo",
+        "Equipo",
+        "Tipo_Combustible",
+        "Rendimiento",
+        "Observacion",
+    ]
+
+    for columna in columnas_texto:
+        combustible = asegurar_columna(combustible, columna, "")
+
+    for columna in [
+        "Litros",
+        "Valor_Unitario",
+        "Costo_Total",
+        "Km_Horometro",
+    ]:
+        combustible = asegurar_columna(combustible, columna, 0)
+        combustible[columna] = combustible[columna].apply(limpiar_numero)
+
+    combustible = preparar_fecha_columnas(combustible, ["Fecha"])
+    combustible = preparar_periodo(combustible)
+    combustible["Equipo"] = combustible["Equipo"].fillna("").astype(str).str.strip()
+
+    return combustible
+
+
+def preparar_documentos(df):
+    documentos = df.copy()
+
+    columnas_texto = [
+        "ID_Documento",
+        "ID_Equipo",
+        "Equipo",
+        "Tipo_Documento",
+        "Descripcion",
+        "Estado",
+        "Ruta_Link",
+        "Observacion",
+    ]
+
+    for columna in columnas_texto:
+        documentos = asegurar_columna(documentos, columna, "")
+
+    documentos = preparar_fecha_columnas(
+        documentos,
+        [
+            "Fecha",
+            "Vencimiento",
+        ],
+    )
+
+    documentos = preparar_periodo(documentos)
+    documentos["Equipo"] = documentos["Equipo"].fillna("").astype(str).str.strip()
+
+    return documentos
+
+
+# =========================================================
+# COMPONENTES VISUALES
+# =========================================================
+
+def aplicar_formato_grafico(figura, altura=360):
+    figura.update_layout(
+        height=altura,
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        font=dict(
+            color=COLOR_TEXTO,
+            size=12,
+        ),
+        title_font=dict(
+            color=COLOR_TEXTO,
+            size=16,
+        ),
+        legend=dict(
+            font=dict(
+                color=COLOR_TEXTO,
+                size=12,
+            ),
+            bgcolor="rgba(0,0,0,0)",
+        ),
+        margin=dict(
+            l=25,
+            r=25,
+            t=55,
+            b=40,
+        ),
+        hoverlabel=dict(
+            bgcolor="white",
+            font_color=COLOR_TEXTO,
+        ),
+    )
+
+    figura.update_xaxes(
+        title_text="",
+        tickfont=dict(
+            color=COLOR_GRIS,
+            size=11,
+        ),
+        gridcolor="#eef2f7",
+        zeroline=False,
+    )
+
+    figura.update_yaxes(
+        title_text="",
+        tickfont=dict(
+            color=COLOR_GRIS,
+            size=11,
+        ),
+        gridcolor="#eef2f7",
+        zeroline=False,
+    )
+
+    return figura
+
+
+def crear_donut_costos(costos_item):
+    fig = go.Figure()
+
+    fig.add_trace(
+        go.Pie(
+            labels=costos_item["Item"],
+            values=costos_item["Costo"],
+            hole=0.64,
+            marker=dict(
+                colors=[
+                    "#2563eb",
+                    "#ffb020",
+                    "#55c595",
+                ],
+                line=dict(color="white", width=2),
+            ),
+            textinfo="percent",
+            textposition="inside",
+            insidetextorientation="auto",
+            textfont=dict(
+                color="white",
+                size=14,
+                family="Arial Black",
+            ),
+            hovertemplate="<b>%{label}</b><br>Monto: %{customdata}<br>Participación: %{percent}<extra></extra>",
+            customdata=[pesos(v) for v in costos_item["Costo"]],
+        )
+    )
+
+    total = costos_item["Costo"].sum()
+
+    fig.update_layout(
+        title="Distribución de Costos",
+        height=350,
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        font=dict(color=COLOR_TEXTO),
+        margin=dict(l=10, r=10, t=45, b=10),
+        annotations=[
+            dict(
+                text=f"Total<br><b>$ {numero(total)}</b>",
+                x=0.5,
+                y=0.5,
+                font_size=15,
+                font_color="#0f172a",
+                showarrow=False,
+            )
+        ],
+        legend=dict(
+            orientation="v",
+            x=1.02,
+            y=0.72,
+            font=dict(size=12),
+        ),
+        uniformtext_minsize=11,
+        uniformtext_mode="hide",
+    )
+
+    return fig
+
+
+
+def calcular_barra_proxima_mantencion(km_actual, proxima_mantencion, unidad=""):
+    return calcular_estado_proxima_mantencion(km_actual, proxima_mantencion, unidad)[:4]
+
+
+def kpi_card(icono, titulo, valor, subtitulo, color_fondo):
+    st.markdown(
+        f"""
+<div class="kpi-card">
+    <div class="kpi-icon" style="background:{color_fondo};">{icono}</div>
+    <div class="kpi-title">{titulo}</div>
+    <div class="kpi-value">{valor}</div>
+    <div class="kpi-sub">{subtitulo}</div>
+</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def tarjeta_equipo(fila):
+    estado = str(fila.get("Estado", "Sin estado"))
+    clase = estado_clase(estado)
+
+    km_actual = limpiar_numero(fila.get("Km_Horometro_Actual", 0))
+    unidad_raw = fila.get("Unidad_Control", "")
+    unidad = escape_html(unidad_control_texto(unidad_raw))
+    proxima = limpiar_numero(fila.get("Proxima_Mantencion", 0))
+    avance, texto_barra, color_barra, proxima_txt = calcular_barra_proxima_mantencion(km_actual, proxima, unidad_raw)
+
+    src = imagen_equipo_src(fila)
+
+    if src:
+        imagen_html = f'<img class="equipo-img" src="{src}" alt="Imagen equipo">'
+    else:
+        imagen_html = '<div class="equipo-img-placeholder">🚜</div>'
+
+    equipo = escape_html(fila.get("Equipo", ""))
+    modelo = escape_html(fila.get("Modelo", ""))
+    patente = escape_html(fila.get("Patente_Codigo", ""))
+    estado_txt = escape_html(estado)
+    texto_barra = escape_html(texto_barra)
+    proxima_txt = escape_html(proxima_txt)
+
+    modelo_valido = modelo if modelo and modelo.lower() not in ["nan", "none", "s/c", "n/a"] else "Sin modelo"
+    patente_valida = patente if patente and patente.lower() not in ["nan", "none", "s/c", "n/a"] else "Sin patente"
+    detalle = f"Modelo: {modelo_valido} · Patente: {patente_valida}"
+
+    valor_uso = formatear_valor_control(km_actual, unidad_raw)
+
+    st.markdown(
+        f"""
+<div class="equipo-card">
+    {imagen_html}
+    <div class="equipo-nombre">{equipo}</div>
+    <div class="equipo-sub">{detalle}</div>
+    <div class="{clase}">{estado_txt}</div>
+    <div class="equipo-sub">Lectura actual: {escape_html(valor_uso)}</div>
+    <div class="equipo-sub">Próxima mantención: <b>{proxima_txt}</b></div>
+    <div class="progress-bg">
+        <div class="progress-fill" style="width:{avance:.0f}%; --barra-color:{color_barra}; background-color:{color_barra} !important;"></div>
+    </div>
+    <div class="equipo-sub"><b>Análisis próxima mantención:</b> {texto_barra}</div>
+</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+# =========================================================
+# MENÚ PROPIO# =========================================================
+# MENÚ PROPIO
+# =========================================================
+
+def construir_menu(equipos, mantenciones, gastos, combustible, checklist, documentos):
+    # Ícono superior del menú.
+    # Busca automáticamente una imagen llamada logoredondo / logo redondo en la carpeta del proyecto.
+    ruta_logo_menu = (
+        buscar_imagen_por_nombre("logoredondo")
+        or buscar_imagen_por_nombre("logo redondo")
+        or buscar_imagen_por_nombre("logo_redondo")
+        or buscar_imagen_por_nombre("logo-redondo")
+    )
+
+    if ruta_logo_menu:
+        logo_menu_b64 = archivo_a_base64(ruta_logo_menu)
+        logo_menu_mime = extension_mime(ruta_logo_menu)
+        icono_menu_html = (
+            '<div class="menu-icon-img">'
+            f'<img src="data:{logo_menu_mime};base64,{logo_menu_b64}" alt="Logo menú">'
+            '</div>'
+        )
+    else:
+        icono_menu_html = '<div class="menu-icon">🚜</div>'
+
+    # Estado del menú usado por CSS.
+    # Se define aquí para evitar alerta de Pylance cuando analiza esta función.
+    colapsado = bool(st.session_state.get("menu_colapsado", False))
+    estado_menu_css = "menu-state-collapsed" if colapsado else "menu-state-expanded"
+
+    st.markdown(
+        f"""
+        <div class="menu-bg"></div>
+        <div class="menu-marker {estado_menu_css}"></div>
+        <div class="menu-panel-content">
+            <div class="menu-brand">
+                {icono_menu_html}
+                <div>
+                    <div class="menu-title">SEGUIMIENTO<br>EQUIPOS MÓVILES</div>
+                    <div class="menu-subtitle">SAIVAM · MULCHÉN</div>
+                </div>
+            </div>
+            <hr class="menu-line">
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Menú con botones nativos de Streamlit.
+    # Esto evita que el navegador abra pestañas nuevas al cambiar de página.
+    paginas_menu = {
+        "panel": "📊 Dashboard Ejecutivo",
+        "equipos": "🚚 Equipos",
+        "mantenciones": "🛠️ Mantenciones",
+        "repuestos": "🧾 Gastos Adicionales",
+        "costos": "💰 Costos",
+        "proximas": "📅 Próximas Mantenciones",
+        "alertas": "🔔 Alertas",
+        "documentos": "📁 Documentación Legal",
+    }
+
+    pagina_actual = st.query_params.get("pagina", "panel")
+
+    if pagina_actual not in paginas_menu:
+        pagina_actual = "panel"
+        st.query_params["pagina"] = "panel"
+
+    st.markdown('<div class="menu-botones-title"></div>', unsafe_allow_html=True)
+
+    for clave, texto in paginas_menu.items():
+        es_actual = clave == pagina_actual
+
+        if es_actual:
+            st.markdown(
+                f'<div class="menu-active-item">{texto}</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            if st.button(
+                texto,
+                key=f"menu_{clave}",
+                use_container_width=True,
+            ):
+                st.query_params["pagina"] = clave
+                st.rerun()
+
+    st.markdown('<hr class="menu-line">', unsafe_allow_html=True)
+
+    if st.button("🔄 Actualizar", key="actualizar_base_datos", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
+
+    st.markdown('<hr class="menu-line">', unsafe_allow_html=True)
+
+    pagina = paginas_menu[pagina_actual]
+
+    equipos_disponibles = (
+        ["Todos los equipos"]
+        + equipos["Equipo"]
+        .dropna()
+        .astype(str)
+        .str.strip()
+        .loc[lambda x: x != ""]
+        .drop_duplicates()
+        .tolist()
+    )
+
+    anios_base = pd.concat(
+        [
+            mantenciones["Año"],
+            gastos["Año"],
+            combustible["Año"],
+            checklist["Año"],
+            documentos["Año"],
+        ],
+        ignore_index=True,
+    )
+
+    anios_disponibles = sorted(
+        [
+            int(x)
+            for x in anios_base.dropna().unique().tolist()
+            if str(x) != "nan"
+        ]
+    )
+
+    filtro_equipo = st.selectbox(
+        "Equipo",
+        equipos_disponibles,
+    )
+
+    filtro_anio = st.selectbox(
+        "Año",
+        ["Todos"] + anios_disponibles,
+    )
+
+    filtro_mes = st.selectbox(
+        "Mes",
+        ["Todos"] + list(MESES.values()),
+    )
+
+    st.markdown(
+        f"""
+        <div class="menu-footer-box">
+            <div class="menu-info">
+                <b>Contrato:</b> {CONTRATO}<br>
+                <b>Cliente:</b> {CLIENTE}<br>
+                <b>Versión:</b> {VERSION}<br>
+                <b>Actualización:</b><br>
+                {datetime.now().strftime("%d/%m/%Y %H:%M")}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    return pagina, filtro_equipo, filtro_anio, filtro_mes
+
+
+# =========================================================
+# ENCABEZADO
+# =========================================================
+
+def encabezado(titulo):
+    logo_html = ""
+
+    if os.path.exists(LOGO_SUPERIOR):
+        logo_b64 = archivo_a_base64(LOGO_SUPERIOR)
+        logo_html = f'<img src="data:image/png;base64,{logo_b64}" alt="SAIVAM">'
+
+    st.markdown(
+        f"""
+        <div class="main-fixed-header">
+            <div class="main-fixed-title">{escape_html(titulo)}</div>
+            <div class="main-fixed-logo">{logo_html}</div>
+        </div>
+        <div class="main-fixed-header-spacer"></div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+# =========================================================
+# PÁGINAS
+# =========================================================
+
+def pagina_dashboard(equipos_f, mant_f, gastos_f, combustible_f, proximas_originales, filtro_equipo):
+    hoy = pd.Timestamp(datetime.now().date())
+
+    gastos_sin_combustible = gastos_no_combustible(gastos_f)
+
+    costo_mantenciones = float(mant_f["Costo_CLP"].sum())
+    costo_gastos = float(gastos_sin_combustible["Costo_CLP"].sum())
+    costo_combustible = float(combustible_f["Costo_Total"].sum()) if "Costo_Total" in combustible_f.columns else 0.0
+    # En el tablero principal se excluye combustible del total solicitado para distribución.
+    costo_total = costo_mantenciones + costo_gastos
+
+    mant_realizadas = len(mant_f)
+    repuestos_utilizados = len(gastos_sin_combustible)
+    equipos_registrados = len(equipos_f)
+
+    if "Proxima_Mantencion" not in proximas_originales.columns:
+        proximas_originales = pd.DataFrame(columns=["Equipo", "Categoria", "Tipo_Mantencion", "Proxima_Mantencion", "Km_Horometro_Actual", "Unidad_Control", "Costo_CLP"])
+
+    mant_proximas = proximas_originales.copy()
+    if "Proxima_Mantencion" in mant_proximas.columns:
+        mant_proximas["Proxima_Mantencion"] = mant_proximas["Proxima_Mantencion"].apply(limpiar_numero)
+        mant_proximas = mant_proximas[mant_proximas["Proxima_Mantencion"] > 0].copy()
+
+    if filtro_equipo != "Todos los equipos":
+        mant_proximas = mant_proximas[mant_proximas["Equipo"] == filtro_equipo]
+
+    mant_proximas = resumen_proximas_por_equipo(mant_proximas) if not mant_proximas.empty else mant_proximas
+    if not mant_proximas.empty:
+        proxima_fila = mant_proximas.iloc[0]
+        equipo_proximo = str(proxima_fila.get("Equipo", "Sin equipo")).strip()
+        proxima_valor = proxima_fila.get("Proxima_Texto", "Sin dato")
+        proxima_estado = proxima_fila.get("Texto_Estado", "Sin análisis")
+
+        # Dashboard Ejecutivo: en la tarjeta de Próxima Mantención se muestra primero
+        # el equipo correspondiente y debajo el Km/Horómetro objetivo con su estado.
+        # Ejemplo: Grúa horquilla / Próx.: 7.952 Horómetro | Vencida: excedida en 675 Horómetro
+        proxima_texto = equipo_proximo if equipo_proximo else "Sin equipo"
+        proxima_sub = f"Próx.: {proxima_valor} | {proxima_estado}"
+    else:
+        proxima_texto = "Sin registro"
+        proxima_sub = "No programada"
+
+    k1, k2, k3, k4, k5 = st.columns(5)
+
+    with k1:
+        kpi_card("🛠️", "Mantenciones", f"{mant_realizadas}", "Registros del período", "#dbeafe")
+
+    with k2:
+        kpi_card("💲", "Monto Total", pesos(costo_total), "Costos del período", "#dcfce7")
+
+    with k3:
+        kpi_card("🧰", "Gastos Adic.", f"{repuestos_utilizados}", "Repuestos, mantenciones y administrativos", "#f3e8ff")
+
+    with k4:
+        kpi_card("📅", "Próxima Mantención", proxima_texto, proxima_sub, "#ffedd5")
+
+    with k5:
+        kpi_card("🚚", "Equipos Registrados", f"{equipos_registrados}", "Total equipos", "#ccfbf1")
+
+    c1, c2 = st.columns([1.55, 1])
+
+    with c1:
+        st.markdown('<div class="panel-title">Histórico de Mantenciones</div>', unsafe_allow_html=True)
+
+        historico = mant_f.copy()
+        if "Tipo_Mantencion" in historico.columns:
+            historico["Mantencion"] = historico["Tipo_Mantencion"].apply(normalizar_tipo_mantencion)
+
+        if not historico.empty:
+            historico = historico.sort_values("Fecha", ascending=False).head(10)
+
+            columnas_base = [
+                "Fecha",
+                "Equipo",
+                "Mantencion",
+                "Descripcion",
+                "Costo_CLP",
+                "Estado_Mantencion",
+            ]
+
+            columnas_base = [c for c in columnas_base if c in historico.columns]
+            mostrar = historico[columnas_base].copy()
+
+            if "Fecha" in mostrar.columns:
+                mostrar["Fecha"] = mostrar["Fecha"].apply(fecha_texto)
+
+            if "Costo_CLP" in mostrar.columns:
+                mostrar["Costo_CLP"] = mostrar["Costo_CLP"].apply(pesos)
+
+            mostrar = mostrar.rename(
+                columns={
+                    "Mantencion": "Tipo",
+                    "Descripcion": "Descripción",
+                    "Costo_CLP": "Monto",
+                    "Estado_Mantencion": "Estado",
+                }
+            )
+
+            mostrar_tabla_clara(mostrar, height=310)
+
+        else:
+            st.info("No existen mantenciones registradas para el filtro aplicado.")
+
+    with c2:
+        st.markdown('<div class="panel-title">Distribución de Costos</div>', unsafe_allow_html=True)
+
+        costos_item = construir_consolidado_costos(mant_f, gastos_f)
+
+        fig_donut = crear_donut_costos(costos_item)
+        st.plotly_chart(fig_donut, use_container_width=True)
+
+    c3, c4, c5 = st.columns([1.08, 0.90, 1.12])
+
+    with c3:
+        st.markdown('<div class="panel-title">Gastos adicionales / Administrativos</div>', unsafe_allow_html=True)
+
+        repuestos = gastos_sin_combustible.copy()
+
+        if not repuestos.empty:
+            repuestos = repuestos.sort_values("Fecha", ascending=False).head(6)
+
+            columnas_repuestos = [
+                "Fecha",
+                "Equipo",
+                "Tipo_Gasto",
+                "Descripcion",
+                "Costo_CLP",
+            ]
+
+            columnas_repuestos = [c for c in columnas_repuestos if c in repuestos.columns]
+            mostrar = repuestos[columnas_repuestos].copy()
+
+            if "Fecha" in mostrar.columns:
+                mostrar["Fecha"] = mostrar["Fecha"].apply(fecha_texto)
+
+            if "Costo_CLP" in mostrar.columns:
+                mostrar["Costo_CLP"] = mostrar["Costo_CLP"].apply(pesos)
+
+            mostrar = mostrar.rename(
+                columns={
+                    "Tipo_Gasto": "Tipo",
+                    "Descripcion": "Detalle",
+                    "Costo_CLP": "Monto",
+                }
+            )
+
+            mostrar_tabla_clara(mostrar, height=230)
+
+        else:
+            st.info("No existen gastos adicionales o administrativos registrados.")
+
+    with c4:
+        st.markdown('<div class="proximas-box">', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title">Próximas Mantenciones</div>', unsafe_allow_html=True)
+
+        proximas = mant_proximas.copy()
+
+        if not proximas.empty:
+            for _, fila in proximas.iterrows():
+                proxima_txt = fila.get("Proxima_Texto", formatear_valor_control(fila.get("Proxima_Mantencion", 0), fila.get("Unidad_Control", "")))
+                saldo_restante = limpiar_numero(fila.get("Saldo_Restante", 0))
+                saldo_txt = formatear_saldo_control(saldo_restante, fila.get("Unidad_Control", ""))
+                clase_badge = "badge-days badge-overdue" if saldo_restante < 0 else "badge-days"
+
+                st.markdown(
+                    f"""
+<div class="next-item">
+    <div>
+        <div class="next-title">{escape_html(fila.get("Equipo", ""))}</div>
+        <div class="next-sub">{escape_html(fila.get("Categoria", ""))}</div>
+        <div class="next-sub">Próx.: {escape_html(proxima_txt)}</div>
+    </div>
+    <div class="{clase_badge}">{escape_html(saldo_txt)}</div>
+</div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+        else:
+            st.info("No existen próximas mantenciones registradas.")
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with c5:
+        st.markdown('<div class="panel-title">Evolución de Costos</div>', unsafe_allow_html=True)
+
+        mant_mes = (
+            mant_f
+            .groupby(["Año", "Mes_Numero", "Periodo"], as_index=False)["Costo_CLP"]
+            .sum()
+            .rename(columns={"Costo_CLP": "Mantenciones"})
+        )
+
+        gasto_mes = (
+            gastos_sin_combustible
+            .groupby(["Año", "Mes_Numero", "Periodo"], as_index=False)["Costo_CLP"]
+            .sum()
+            .rename(columns={"Costo_CLP": "Gastos"})
+        )
+
+        comb_mes = (
+            combustible_f
+            .groupby(["Año", "Mes_Numero", "Periodo"], as_index=False)["Costo_Total"]
+            .sum()
+            .rename(columns={"Costo_Total": "Combustible"})
+        )
+
+        costos_mes = (
+            mant_mes
+            .merge(gasto_mes, on=["Año", "Mes_Numero", "Periodo"], how="outer")
+            .merge(comb_mes, on=["Año", "Mes_Numero", "Periodo"], how="outer")
+            .fillna(0)
+        )
+
+        if not costos_mes.empty:
+            costos_mes = costos_mes.sort_values(["Año", "Mes_Numero"])
+
+            costos_mes["Monto Acumulado"] = (
+                costos_mes["Mantenciones"]
+                + costos_mes["Gastos"]
+                + costos_mes["Combustible"]
+            ).cumsum()
+
+            fig_linea = px.line(
+                costos_mes,
+                x="Periodo",
+                y="Monto Acumulado",
+                markers=True,
+                template="plotly_white",
+            )
+
+            fig_linea.update_traces(
+                line=dict(width=3, color="#2563eb"),
+                marker=dict(size=7),
+                name="",
+                showlegend=False,
+                customdata=costos_mes["Monto Acumulado"].apply(pesos),
+                hovertemplate="<b>%{x}</b><br>Monto acumulado: %{customdata}<extra></extra>",
+            )
+            fig_linea.update_layout(title_text="", showlegend=False, legend_title_text="")
+
+            st.plotly_chart(aplicar_formato_grafico(fig_linea, 210), use_container_width=True)
+
+        else:
+            st.info("Sin costos para graficar.")
+
+    st.markdown('<div class="panel-title">Estado de los Equipos</div>', unsafe_allow_html=True)
+
+    if equipos_f.empty:
+        st.info("No existen equipos registrados.")
+
+    else:
+        cantidad_columnas = min(len(equipos_f), 7)
+
+        if cantidad_columnas <= 0:
+            cantidad_columnas = 1
+
+        columnas = st.columns(cantidad_columnas)
+
+        for columna, (_, fila) in zip(columnas, equipos_f.head(7).iterrows()):
+            with columna:
+                tarjeta_equipo(fila)
+
+
+def pagina_equipos(equipos_f):
+    st.markdown('<div class="section-head"><div class="panel-title page-section-title">Ficha y Estado General de Equipos</div><div class="panel-subtitle">Vista rápida de equipos</div></div>', unsafe_allow_html=True)
+
+    if equipos_f.empty:
+        st.info("No existen equipos registrados.")
+        return
+
+    cantidad_columnas = min(len(equipos_f), 7)
+
+    if cantidad_columnas <= 0:
+        cantidad_columnas = 1
+
+    columnas = st.columns(cantidad_columnas)
+
+    for columna, (_, fila) in zip(columnas, equipos_f.head(7).iterrows()):
+        with columna:
+            tarjeta_equipo(fila)
+
+    st.markdown('<div class="panel-title">Tabla general</div>', unsafe_allow_html=True)
+
+    # Tabla limpia: se muestran solo columnas operativas.
+    # Se ocultan columnas técnicas, duplicadas o auxiliares de la planilla.
+    columnas_tabla_equipos = [
+        "Equipo",
+        "Patente_Codigo",
+        "Tipo_Equipo",
+        "Marca",
+        "Modelo",
+        "Año",
+        "Estado",
+        "Fecha_Ingreso",
+        "Km_Horometro_Actual",
+        "Unidad_Control",
+        "Frecuencia_Mantencion",
+        "Proxima_Mantencion",
+        "Observacion",
+    ]
+
+    columnas_tabla_equipos = [c for c in columnas_tabla_equipos if c in equipos_f.columns]
+    equipos_mostrar = equipos_f[columnas_tabla_equipos].copy()
+
+    if "Fecha_Ingreso" in equipos_mostrar.columns:
+        equipos_mostrar["Fecha_Ingreso"] = equipos_mostrar["Fecha_Ingreso"].apply(fecha_texto)
+
+    if "Km_Horometro_Actual" in equipos_mostrar.columns:
+        equipos_mostrar["Km_Horometro_Actual"] = equipos_mostrar.apply(
+            lambda x: formatear_valor_control(x.get("Km_Horometro_Actual", 0), x.get("Unidad_Control", "")),
+            axis=1,
+        )
+
+    if "Proxima_Mantencion" in equipos_mostrar.columns:
+        equipos_mostrar["Proxima_Mantencion"] = equipos_mostrar.apply(
+            lambda x: formatear_valor_control(x.get("Proxima_Mantencion", 0), x.get("Unidad_Control", "")),
+            axis=1,
+        )
+
+    if "Año" in equipos_mostrar.columns:
+        equipos_mostrar["Año"] = equipos_mostrar["Año"].apply(numero)
+
+    equipos_mostrar = equipos_mostrar.rename(
+        columns={
+            "Patente_Codigo": "Patente / Código",
+            "Tipo_Equipo": "Tipo",
+            "Fecha_Ingreso": "Fecha ingreso",
+            "Km_Horometro_Actual": "Km / Horómetro actual",
+            "Unidad_Control": "Unidad",
+            "Frecuencia_Mantencion": "Frecuencia mantención",
+            "Proxima_Mantencion": "Próxima mantención",
+            "Observacion": "Observación",
+        }
+    )
+
+    mostrar_tabla_clara(equipos_mostrar, height=520)
+
+
+def pagina_mantenciones(mant_f):
+    st.markdown('<div class="section-head"><div class="panel-title page-section-title">Historial de Mantenciones</div></div>', unsafe_allow_html=True)
+
+    if mant_f.empty:
+        st.info("No existen mantenciones para el filtro aplicado.")
+        return
+
+    mant_base = mant_f.copy()
+    if "Tipo_Mantencion" not in mant_base.columns:
+        mant_base["Tipo_Mantencion"] = mant_base.get("Mantencion", "Sin tipo")
+
+    mant_base["Tipo_Mantencion"] = mant_base["Tipo_Mantencion"].apply(normalizar_tipo_mantencion)
+    mant_base["Mantencion"] = mant_base["Tipo_Mantencion"]
+    mant_base["Costo_CLP"] = mant_base["Costo_CLP"].apply(limpiar_numero)
+
+    # En este panel se trabaja únicamente con Preventiva y Correctiva.
+    mant_base = mant_base[mant_base["Tipo_Mantencion"].isin(["Preventiva", "Correctiva"])].copy()
+
+    if mant_base.empty:
+        st.info("No existen mantenciones preventivas o correctivas para el filtro aplicado.")
+        return
+
+    tipos_presentes = [t for t in ["Preventiva", "Correctiva"] if t in mant_base["Tipo_Mantencion"].unique()]
+    filtro_tipo = st.selectbox(
+        "Filtrar por tipo de mantención",
+        ["Todos"] + tipos_presentes,
+        index=0,
+    )
+
+    if filtro_tipo != "Todos":
+        mant_vista = mant_base[mant_base["Tipo_Mantencion"] == filtro_tipo].copy()
+    else:
+        mant_vista = mant_base.copy()
+
+    c1, c2 = st.columns(2)
+
+    with c1:
+        kpi_card(
+            "🟢",
+            "Preventivas",
+            pesos(mant_base[mant_base["Tipo_Mantencion"] == "Preventiva"]["Costo_CLP"].sum()),
+            "Costo acumulado",
+            "#dcfce7",
+        )
+
+    with c2:
+        kpi_card(
+            "🔴",
+            "Correctivas",
+            pesos(mant_base[mant_base["Tipo_Mantencion"] == "Correctiva"]["Costo_CLP"].sum()),
+            "Costo acumulado",
+            "#fee2e2",
+        )
+
+    tipo = (
+        mant_base
+        .groupby("Tipo_Mantencion", as_index=False)["Costo_CLP"]
+        .sum()
+        .sort_values("Costo_CLP", ascending=False)
+    )
+
+    if not tipo.empty:
+        total_costo = tipo["Costo_CLP"].sum()
+        tipo["Monto"] = tipo["Costo_CLP"].apply(pesos)
+        tipo["Porcentaje"] = tipo["Costo_CLP"].apply(
+            lambda x: f"{(x / total_costo * 100):.1f}%" if total_costo > 0 else "0.0%"
+        )
+        tipo["Etiqueta"] = tipo.apply(
+            lambda x: f"{x['Tipo_Mantencion']}<br>{x['Porcentaje']}<br>{x['Monto']}",
+            axis=1,
+        )
+
+        fig = go.Figure(
+            data=[
+                go.Pie(
+                    labels=tipo["Tipo_Mantencion"],
+                    values=tipo["Costo_CLP"],
+                    hole=0.48,
+                    text=tipo["Etiqueta"],
+                    textinfo="text",
+                    textposition="inside",
+                    insidetextorientation="radial",
+                    hovertemplate="%{label}<br>%{percent}<br>$ %{value:,.0f}<extra></extra>",
+                )
+            ]
+        )
+
+        fig.update_layout(
+            title=dict(
+                text="Distribución de costos por tipo de mantención",
+                x=0.01,
+                xanchor="left",
+                y=0.98,
+                yanchor="top",
+                font=dict(size=16, color=COLOR_TEXTO),
+            ),
+            showlegend=True,
+            legend_title_text="Tipo",
+            margin=dict(l=18, r=18, t=42, b=18),
+        )
+
+        # Altura menor para que el gráfico de torta quepa completo en la pantalla.
+        st.plotly_chart(aplicar_formato_grafico(fig, 340), use_container_width=True)
+
+    if mant_vista.empty:
+        st.info("No existen mantenciones para el tipo seleccionado.")
+        return
+
+    mostrar = preparar_tabla_mantenciones(mant_vista)
+    mostrar_tabla_clara(mostrar, height=420)
+
+def pagina_repuestos(gastos_f):
+    st.markdown('<div class="panel-title">Repuestos y Gastos Adicionales</div>', unsafe_allow_html=True)
+
+    gastos_sin_combustible = gastos_no_combustible(gastos_f)
+
+    # Limpia filas vacías antes de graficar o mostrar tabla.
+    gastos_sin_combustible = gastos_sin_combustible[
+        (gastos_sin_combustible["Equipo"].astype(str).str.lower().str.strip().isin(["", "nan", "none"]) == False)
+        | (gastos_sin_combustible["Costo_CLP"] > 0)
+        | (gastos_sin_combustible["Fecha"].notna())
+    ].copy()
+
+    if gastos_sin_combustible.empty:
+        st.info("No existen repuestos o gastos adicionales para el filtro aplicado.")
+        return
+
+    tipos = sorted([t for t in gastos_sin_combustible["Tipo_Gasto"].dropna().astype(str).unique() if t.strip() != ""])
+    filtro_tipo_gasto = st.selectbox("Filtrar por tipo de gasto", ["Todos"] + tipos)
+
+    gastos_vista = gastos_sin_combustible.copy()
+    if filtro_tipo_gasto != "Todos":
+        gastos_vista = gastos_vista[gastos_vista["Tipo_Gasto"] == filtro_tipo_gasto].copy()
+
+    resumen = (
+        gastos_vista
+        .groupby("Clasificacion_Costo", as_index=False)["Costo_CLP"]
+        .sum()
+        .sort_values("Costo_CLP", ascending=False)
+    )
+
+    if not resumen.empty:
+        resumen_grafico = resumen.copy()
+        resumen_grafico["Costo_Millones"] = resumen_grafico["Costo_CLP"].apply(limpiar_numero) / 1_000_000
+        fig = px.bar(
+            resumen_grafico,
+            x="Clasificacion_Costo",
+            y="Costo_Millones",
+            text=resumen_grafico["Costo_CLP"].apply(pesos),
+            template="plotly_white",
+            title="Costo consolidado por tipo de gasto",
+            custom_data=["Costo_CLP"],
+        )
+
+        fig.update_traces(marker_color="#f59e0b", textposition="outside", hovertemplate="Consolidado: %{x}<br>Monto: %{customdata[0]:,.0f} $<br>Millones CLP: %{y:.2f} M<extra></extra>")
+        fig.update_layout(xaxis_title="Consolidado", yaxis_title="Millones CLP")
+        fig.update_yaxes(tickformat=",.1f", ticksuffix=" M", separatethousands=True)
+        st.plotly_chart(aplicar_formato_grafico(fig, 390), use_container_width=True)
+
+    if gastos_vista.empty:
+        st.info("No existen registros para el tipo seleccionado.")
+        return
+
+    mostrar = preparar_tabla_repuestos(gastos_vista)
+    mostrar_tabla_clara(mostrar, height=450)
+
+
+def pagina_costos(mant_f, gastos_f, combustible_f):
+    st.markdown('<div class="section-head"><div class="panel-title page-section-title">Análisis de Costos</div></div>', unsafe_allow_html=True)
+
+    gastos_sin_combustible = gastos_no_combustible(gastos_f)
+
+    costo_mantenciones = float(mant_f["Costo_CLP"].sum())
+    costo_gastos = float(gastos_sin_combustible["Costo_CLP"].sum())
+    costo_combustible = float(combustible_f["Costo_Total"].sum()) if "Costo_Total" in combustible_f.columns else 0.0
+    # En el tablero principal se excluye combustible del total solicitado para distribución.
+    costo_total = costo_mantenciones + costo_gastos
+
+    c1, c2, c3, c4 = st.columns(4)
+
+    with c1:
+        kpi_card("💲", "Total", pesos(costo_total), "Costo acumulado", "#dcfce7")
+
+    with c2:
+        kpi_card("🛠️", "Mantenciones", pesos(costo_mantenciones), "Costo mantención", "#dbeafe")
+
+    with c3:
+        kpi_card("🧰", "Gastos Adic.", pesos(costo_gastos), "Repuestos, mantenciones y administrativos", "#ede9fe")
+
+    costos_item = construir_consolidado_costos(mant_f, gastos_f)
+
+    fig_donut = crear_donut_costos(costos_item)
+    st.plotly_chart(fig_donut, use_container_width=True)
+
+
+def pagina_proximas(proximas_base, filtro_equipo):
+    st.markdown('<div class="section-head"><div class="panel-title page-section-title">Próximas Mantenciones por Km/Horómetro</div></div>', unsafe_allow_html=True)
+
+    if "Proxima_Mantencion" not in proximas_base.columns:
+        proximas_base = pd.DataFrame(columns=["Equipo", "Categoria", "Tipo_Mantencion", "Proxima_Mantencion", "Km_Horometro_Actual", "Unidad_Control", "Costo_CLP"])
+
+    proximas = proximas_base.copy()
+    proximas["Proxima_Mantencion"] = proximas["Proxima_Mantencion"].apply(limpiar_numero)
+    proximas = proximas[proximas["Proxima_Mantencion"] > 0].copy()
+
+    if filtro_equipo != "Todos los equipos":
+        proximas = proximas[proximas["Equipo"] == filtro_equipo]
+
+    if proximas.empty:
+        st.info("No existen próximas mantenciones registradas por Km/Horómetro.")
+        return
+
+    proximas = aplicar_unidad_control_por_equipo(proximas)
+    proximas = enriquecer_estado_proximas(proximas)
+    proximas["_prioridad"] = proximas["Estado_Control"].apply(prioridad_estado_control)
+    proximas = proximas.sort_values(["_prioridad", "Saldo_Restante", "Equipo"], ascending=[True, True, True]).drop(columns=["_prioridad"], errors="ignore")
+    proximas = ocultar_columnas_tecnicas(proximas)
+    mostrar = preparar_tabla_proximas(proximas)
+    mostrar_tabla_clara(mostrar, height=520)
+
+
+def pagina_alertas(proximas_mantenciones, checklist, documentos, filtro_equipo):
+    st.markdown('<div class="section-head"><div class="panel-title page-section-title">Alertas Operacionales</div></div>', unsafe_allow_html=True)
+
+    hoy = pd.Timestamp(datetime.now().date())
+
+    # -----------------------------------------------------
+    # Bases seguras: evita errores si una hoja o columna no existe.
+    # -----------------------------------------------------
+    # Base oficial para alertas de mantención: próximas mantenciones calculadas desde hoja EQUIPOS.
+    # Esto permite detectar vencidas por Km/Horómetro aunque la hoja MANTENCIONES no tenga registros.
+    mant_base = proximas_mantenciones.copy() if isinstance(proximas_mantenciones, pd.DataFrame) else pd.DataFrame()
+    check_base = checklist.copy() if isinstance(checklist, pd.DataFrame) else pd.DataFrame()
+    docs_base = documentos.copy() if isinstance(documentos, pd.DataFrame) else pd.DataFrame()
+
+    for col in ["Equipo", "Tipo_Mantencion", "Categoria", "Proveedor", "Descripcion", "Estado_Mantencion", "Documento_Respaldo", "Observacion"]:
+        mant_base = asegurar_columna(mant_base, col, "")
+    mant_base = asegurar_columna(mant_base, "Fecha", pd.NaT)
+    mant_base = asegurar_columna(mant_base, "Proxima_Mantencion", 0)
+    mant_base = asegurar_columna(mant_base, "Km_Horometro_Actual", 0)
+    mant_base = asegurar_columna(mant_base, "Unidad_Control", "")
+    mant_base = asegurar_columna(mant_base, "Costo_CLP", 0)
+    mant_base["Proxima_Mantencion"] = mant_base["Proxima_Mantencion"].apply(limpiar_numero)
+    mant_base["Fecha"] = mant_base["Fecha"].apply(convertir_fecha)
+    mant_base["Costo_CLP"] = mant_base["Costo_CLP"].apply(limpiar_numero)
+    mant_base["Equipo"] = mant_base["Equipo"].fillna("").astype(str).str.strip()
+
+    for col in ["Equipo", "Estado_Cierre", "Estado_Checklist", "Observacion", "Accion_Requerida", "Responsable"]:
+        check_base = asegurar_columna(check_base, col, "")
+    check_base = asegurar_columna(check_base, "Fecha", pd.NaT)
+    check_base = asegurar_columna(check_base, "Fecha_Cierre", pd.NaT)
+    check_base["Fecha"] = check_base["Fecha"].apply(convertir_fecha)
+    check_base["Fecha_Cierre"] = check_base["Fecha_Cierre"].apply(convertir_fecha)
+    check_base["Equipo"] = check_base["Equipo"].fillna("").astype(str).str.strip()
+
+    for col in ["Equipo", "Tipo_Documento", "Descripcion", "Estado", "Ruta_Link", "Observacion"]:
+        docs_base = asegurar_columna(docs_base, col, "")
+    docs_base = asegurar_columna(docs_base, "Fecha", pd.NaT)
+    docs_base = asegurar_columna(docs_base, "Vencimiento", pd.NaT)
+    docs_base["Fecha"] = docs_base["Fecha"].apply(convertir_fecha)
+    docs_base["Vencimiento"] = docs_base["Vencimiento"].apply(convertir_fecha)
+    docs_base["Equipo"] = docs_base["Equipo"].fillna("").astype(str).str.strip()
+
+    if filtro_equipo != "Todos los equipos":
+        mant_base = mant_base[mant_base["Equipo"] == filtro_equipo].copy()
+        check_base = check_base[check_base["Equipo"] == filtro_equipo].copy()
+        docs_base = docs_base[docs_base["Equipo"] == filtro_equipo].copy()
+
+    # -----------------------------------------------------
+    # Mantenciones por Km/Horómetro: vencidas, próximas críticas y programadas.
+    # -----------------------------------------------------
+    mant_con_fecha = mant_base[
+        (mant_base["Equipo"].str.lower().isin(["", "none", "nan", "sin equipo"]) == False)
+        & (mant_base["Proxima_Mantencion"].apply(limpiar_numero) > 0)
+    ].copy()
+    mant_con_fecha = aplicar_unidad_control_por_equipo(mant_con_fecha)
+    mant_con_fecha = enriquecer_estado_proximas(mant_con_fecha)
+
+    mant_vencidas = mant_con_fecha[mant_con_fecha["Saldo_Restante"] <= 0].copy()
+    mant_30 = mant_con_fecha[
+        (mant_con_fecha["Saldo_Restante"] > 0)
+        & (mant_con_fecha["Estado_Control"].isin(["Crítica", "Próxima"]))
+    ].copy()
+
+    docs_vencidos = docs_base[
+        (docs_base["Equipo"].str.lower().isin(["", "none", "nan", "sin equipo"]) == False)
+        & (docs_base["Vencimiento"].notna())
+        & (docs_base["Vencimiento"] < hoy)
+    ].copy()
+
+    docs_30 = docs_base[
+        (docs_base["Equipo"].str.lower().isin(["", "none", "nan", "sin equipo"]) == False)
+        & (docs_base["Vencimiento"].notna())
+        & (docs_base["Vencimiento"] >= hoy)
+        & (docs_base["Vencimiento"] <= hoy + pd.Timedelta(days=30))
+    ].copy()
+
+    estado_cierre = check_base["Estado_Cierre"].fillna("").astype(str).str.lower().str.strip()
+    check_equipo_valido = check_base["Equipo"].str.lower().isin(["", "none", "nan", "sin equipo"]) == False
+    checklist_pendiente = check_base[
+        check_equipo_valido
+        & (~estado_cierre.isin(["cerrado", "cerrada", "ok", "finalizado", "finalizada", "sin observación", "sin observacion", "sin pendiente", ""] ))
+    ].copy()
+
+    # -----------------------------------------------------
+    # KPIs principales.
+    # -----------------------------------------------------
+    c1, c2, c3, c4 = st.columns(4)
+
+    with c1:
+        kpi_card("🚨", "Mantenciones vencidas", f"{len(mant_vencidas)}", "Atención inmediata", "#fee2e2")
+
+    with c2:
+        kpi_card("🟠", "Mantenciones próximas", f"{len(mant_30)}", "Saldo bajo Km/Horómetro", "#ffedd5")
+
+    with c3:
+        kpi_card("📄", "Documentos críticos", f"{len(docs_vencidos) + len(docs_30)}", "Vencidos o por vencer", "#e0f2fe")
+
+    with c4:
+        kpi_card("✅", "Checklist pendientes", f"{len(checklist_pendiente)}", "Requieren cierre", "#ede9fe")
+
+    # -----------------------------------------------------
+    # Resumen ejecutivo de prioridad.
+    # -----------------------------------------------------
+    total_critico = len(mant_vencidas) + len(docs_vencidos) + len(checklist_pendiente)
+    if total_critico == 0 and len(mant_30) == 0 and len(docs_30) == 0:
+        st.success("Sin alertas críticas registradas para el filtro actual.")
+    elif total_critico > 0:
+        st.error(f"Hay {total_critico} alerta(s) crítica(s) que requieren revisión operacional.")
+    else:
+        st.warning("No hay vencimientos críticos, pero existen mantenciones próximas por saldo bajo de Km/Horómetro.")
+
+    # -----------------------------------------------------
+    # Mantenciones vencidas.
+    # -----------------------------------------------------
+    st.markdown('<div class="panel-title">Mantenciones vencidas</div>', unsafe_allow_html=True)
+
+    if mant_vencidas.empty:
+        st.info("No existen mantenciones vencidas para el filtro actual.")
+    else:
+        mant_vencidas = mant_vencidas.sort_values("Saldo_Restante", ascending=True)
+        mostrar_mant = preparar_tabla_proximas(mant_vencidas)
+        mostrar_tabla_clara(mostrar_mant, height=260)
+
+    # -----------------------------------------------------
+    # Mantenciones próximas por saldo bajo de Km/Horómetro.
+    # -----------------------------------------------------
+    st.markdown('<div class="panel-title">Mantenciones próximas por Km/Horómetro</div>', unsafe_allow_html=True)
+
+    if mant_30.empty:
+        st.info("No existen mantenciones próximas por saldo bajo de Km/Horómetro.")
+    else:
+        mant_30 = mant_30.sort_values("Saldo_Restante", ascending=True)
+        mostrar_30 = preparar_tabla_proximas(mant_30)
+        mostrar_tabla_clara(mostrar_30, height=260)
+
+    # -----------------------------------------------------
+    # Checklist pendientes.
+    # -----------------------------------------------------
+    st.markdown('<div class="panel-title">Checklist pendientes</div>', unsafe_allow_html=True)
+
+    if checklist_pendiente.empty:
+        st.info("No existen checklist pendientes para el filtro actual.")
+    else:
+        mostrar_check = checklist_pendiente.copy()
+        for col in ["Fecha", "Fecha_Cierre"]:
+            if col in mostrar_check.columns:
+                mostrar_check[col] = mostrar_check[col].apply(fecha_texto)
+        mostrar_check = ocultar_columnas_tecnicas(mostrar_check)
+        columnas_check = [
+            "Fecha",
+            "Equipo",
+            "Operador",
+            "Estado_Checklist",
+            "Observacion",
+            "Accion_Requerida",
+            "Estado_Cierre",
+            "Fecha_Cierre",
+        ]
+        columnas_check = [c for c in columnas_check if c in mostrar_check.columns]
+        mostrar_check = mostrar_check[columnas_check].rename(
+            columns={
+                "Estado_Checklist": "Estado checklist",
+                "Observacion": "Observación",
+                "Accion_Requerida": "Acción requerida",
+                "Estado_Cierre": "Estado cierre",
+                "Fecha_Cierre": "Fecha cierre",
+            }
+        )
+        mostrar_tabla_clara(mostrar_check, height=260)
+
+    # -----------------------------------------------------
+    # Documentos vencidos o próximos.
+    # -----------------------------------------------------
+    st.markdown('<div class="panel-title">Documentos vencidos o próximos 30 días</div>', unsafe_allow_html=True)
+
+    docs_alerta = pd.concat([docs_vencidos, docs_30], ignore_index=True, sort=False)
+    if docs_alerta.empty:
+        st.info("No existen documentos vencidos o próximos a vencer.")
+    else:
+        docs_alerta["Días"] = (docs_alerta["Vencimiento"] - hoy).dt.days
+        docs_alerta["Estado alerta"] = docs_alerta["Días"].apply(lambda x: "Vencido" if x < 0 else "Por vencer")
+        docs_alerta = docs_alerta.sort_values("Días", ascending=True)
+        mostrar_docs = docs_alerta.copy()
+        for col in ["Fecha", "Vencimiento"]:
+            if col in mostrar_docs.columns:
+                mostrar_docs[col] = mostrar_docs[col].apply(fecha_texto)
+        mostrar_docs = ocultar_columnas_tecnicas(mostrar_docs)
+        columnas_docs = [
+            "Estado alerta",
+            "Fecha",
+            "Equipo",
+            "Tipo_Documento",
+            "Descripcion",
+            "Estado",
+            "Vencimiento",
+            "Días",
+            "Ruta_Link",
+            "Observacion",
+        ]
+        columnas_docs = [c for c in columnas_docs if c in mostrar_docs.columns]
+        mostrar_docs = mostrar_docs[columnas_docs].rename(
+            columns={
+                "Tipo_Documento": "Tipo documento",
+                "Descripcion": "Descripción",
+                "Ruta_Link": "Ruta / enlace",
+                "Observacion": "Observación",
+            }
+        )
+        mostrar_tabla_clara(mostrar_docs, height=260)
+
+def pagina_documentos(documentos_f):
+    st.markdown('<div class="section-head"><div class="panel-title page-section-title">Control Documental</div></div>', unsafe_allow_html=True)
+
+    if documentos_f.empty:
+        st.info("No existen documentos para el filtro aplicado.")
+        return
+
+    mostrar = documentos_f.copy()
+
+    for col in ["Fecha", "Vencimiento"]:
+        if col in mostrar.columns:
+            mostrar[col] = mostrar[col].apply(fecha_texto)
+
+    mostrar_tabla_clara(mostrar, height=520)
+
+
+# =========================================================
+# PANEL PRINCIPAL
+# =========================================================
+
+def mostrar_panel():
+    fuente_datos, datos = cargar_datos()
+
+    equipos = preparar_equipos(datos["EQUIPOS"])
+    mantenciones = preparar_mantenciones(datos["MANTENCIONES"])
+    gastos = preparar_gastos(datos["GASTOS_ADICIONALES"])
+    checklist = preparar_checklist(datos["CHECKLIST"])
+    combustible = preparar_combustible(datos["COMBUSTIBLE"])
+    documentos = preparar_documentos(datos["DOCUMENTOS"])
+    proximas_base = construir_proximas_mantenciones(equipos, mantenciones)
+
+    with st.sidebar:
+        pagina, filtro_equipo, filtro_anio, filtro_mes = construir_menu(
+            equipos,
+            mantenciones,
+            gastos,
+            combustible,
+            checklist,
+            documentos,
+        )
+
+    equipos_f = equipos.copy()
+
+    if filtro_equipo != "Todos los equipos":
+        equipos_f = equipos_f[equipos_f["Equipo"] == filtro_equipo]
+
+    mant_f = aplicar_filtro_periodo(mantenciones, filtro_equipo, filtro_anio, filtro_mes)
+    gastos_f = aplicar_filtro_periodo(gastos, filtro_equipo, filtro_anio, filtro_mes)
+    combustible_f = aplicar_filtro_periodo(combustible, filtro_equipo, filtro_anio, filtro_mes)
+    checklist_f = aplicar_filtro_periodo(checklist, filtro_equipo, filtro_anio, filtro_mes)
+    documentos_f = aplicar_filtro_periodo(documentos, filtro_equipo, filtro_anio, filtro_mes)
+
+    if pagina == "📊 Dashboard Ejecutivo":
+        titulo_pagina = "Seguimiento y Control de Equipos Móviles"
+    else:
+        titulo_pagina = (
+            pagina.replace("🚚 ", "")
+            .replace("🛠️ ", "")
+            .replace("🧰 ", "").replace("🧾 ", "")
+            .replace("💰 ", "")
+            .replace("📅 ", "")
+            .replace("🔔 ", "")
+            .replace("📁 ", "")
+        )
+
+    encabezado(titulo_pagina)
+
+    if pagina == "📊 Dashboard Ejecutivo":
+        pagina_dashboard(equipos_f, mant_f, gastos_f, combustible_f, proximas_base, filtro_equipo)
+
+    elif pagina == "🚚 Equipos":
+        pagina_equipos(equipos_f)
+
+    elif pagina == "🛠️ Mantenciones":
+        pagina_mantenciones(mant_f)
+
+    elif pagina == "🧾 Gastos Adicionales":
+        pagina_repuestos(gastos_f)
+
+    elif pagina == "💰 Costos":
+        pagina_costos(mant_f, gastos_f, combustible_f)
+
+    elif pagina == "📅 Próximas Mantenciones":
+        pagina_proximas(proximas_base, filtro_equipo)
+
+    elif pagina == "🔔 Alertas":
+        pagina_alertas(proximas_base, checklist, documentos, filtro_equipo)
+
+    elif pagina == "📁 Documentación Legal":
+        pagina_documentos(documentos_f)
+
+    st.markdown(
+        f"""
+        <div style="text-align:center; color:#64748b; font-size:12px; padding:22px; line-height:1.65;">
+            <div style="font-size:13px; font-weight:800; color:#334155; margin-bottom:3px;">
+                Arquitectura, desarrollo e implementación del sistema
+            </div>
+            <div><b>{AUTOR}</b> · {CARGO_AUTOR}</div>
+            <div>{EMPRESA} · {CONTRATO} | Versión {VERSION}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+
+
+# =========================================================
+# CORRECCIÓN FINAL V3.7
+# - Sidebar fijo sin montarse sobre el contenido principal.
+# - Menú y filtros visibles dentro del panel izquierdo.
+# - Montos siempre con signo $ a la izquierda.
+# - Sello de agua SAIVAM visible en página principal.
+# =========================================================
+
+_buscar_imagen_por_nombre_original = buscar_imagen_por_nombre
+
+def buscar_imagen_por_nombre(nombre_base):
+    """Busca imágenes evitando devolver carpetas y agregando soporte para carpeta/archivo saivam."""
+    if not nombre_base or str(nombre_base).strip().lower() in ["", "nan", "none"]:
+        return None
+
+    nombre_base = str(nombre_base).strip()
+
+    # Casos directos con extensión o archivo sin extensión.
+    if os.path.isfile(nombre_base):
+        return nombre_base
+
+    # Soporte especial para sello de agua llamado saivam o carpeta saivam.
+    if normalizar_texto(nombre_base) == "saivam":
+        candidatos_sello = []
+        for carpeta in [".", "assets", "imagenes", "images", "img", "fotos", "saivam"]:
+            for base in ["saivam", "logo_saivam", "logo1", "logo"]:
+                for ext in EXTENSIONES_IMAGEN:
+                    candidatos_sello.append(os.path.join(carpeta, base + ext))
+
+        for candidato in candidatos_sello:
+            if os.path.isfile(candidato):
+                return candidato
+
+    ruta = _buscar_imagen_por_nombre_original(nombre_base)
+
+    if ruta and os.path.isfile(ruta):
+        return ruta
+
+    return None
+
+
+def pesos(valor):
+    """Formato CLP único para toda la aplicación: $ a la izquierda."""
+    try:
+        return f"{int(round(float(valor))):,}".replace(",", ".") + " $"
+    except Exception:
+        return "0 $"
+
+
+def pesos_html(valor):
+    """Formato CLP para HTML/Plotly: $ a la izquierda, sin barras ni dos puntos."""
+    try:
+        return f"{int(round(float(valor))):,}".replace(",", ".") + " $"
+    except Exception:
+        return "0 $"
+
+
+def crear_donut_costos(costos_item):
+    fig = go.Figure()
+
+    fig.add_trace(
+        go.Pie(
+            labels=costos_item["Item"],
+            values=costos_item["Costo"],
+            hole=0.64,
+            marker=dict(
+                colors=["#2563eb", "#ffb020", "#55c595"],
+                line=dict(color="white", width=2),
+            ),
+            textinfo="percent",
+            textposition="inside",
+            insidetextorientation="auto",
+            textfont=dict(color="white", size=14, family="Arial Black"),
+            hovertemplate="<b>%{label}</b><br>Monto: %{customdata}<br>Participación: %{percent}<extra></extra>",
+            customdata=[pesos(v) for v in costos_item["Costo"]],
+        )
+    )
+
+    total = float(costos_item["Costo"].sum())
+
+    fig.update_layout(
+        title="Distribución de Costos",
+        height=350,
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        font=dict(color=COLOR_TEXTO),
+        margin=dict(l=10, r=10, t=45, b=10),
+        annotations=[
+            dict(
+                text="Total<br><b>" + pesos(total) + "</b>",
+                x=0.5,
+                y=0.5,
+                font_size=15,
+                font_color="#0f172a",
+                showarrow=False,
+            )
+        ],
+        legend=dict(orientation="v", x=1.02, y=0.72, font=dict(size=12)),
+        uniformtext_minsize=11,
+        uniformtext_mode="hide",
+    )
+
+    return fig
+
+
+_aplicar_estilo_base = aplicar_estilo
+
+def aplicar_estilo():
+    """Aplica el estilo base y luego fuerza los ajustes finales de estructura."""
+    _aplicar_estilo_base()
+
+    ruta_sello = buscar_imagen_por_nombre("saivam")
+    sello_src = ""
+
+    if ruta_sello and os.path.isfile(ruta_sello):
+        sello_b64 = archivo_a_base64(ruta_sello)
+        sello_mime = extension_mime(ruta_sello)
+        if sello_b64:
+            sello_src = f"data:{sello_mime};base64,{sello_b64}"
+
+    css_final = """
+<style>
+:root {
+    --menu-panel-width-final: 330px;
+    --menu-inner-width-final: 286px;
+}
+
+/* Sidebar fijo y siempre visible */
+section[data-testid="stSidebar"] {
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    position: fixed !important;
+    left: 0 !important;
+    top: 0 !important;
+    bottom: 0 !important;
+    width: var(--menu-panel-width-final) !important;
+    min-width: var(--menu-panel-width-final) !important;
+    max-width: var(--menu-panel-width-final) !important;
+    height: 100vh !important;
+    background: #020617 !important;
+    border-right: 1px solid rgba(147, 197, 253, 0.34) !important;
+    z-index: 1000 !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    transform: none !important;
+}
+
+section[data-testid="stSidebar"] > div,
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+    width: var(--menu-panel-width-final) !important;
+    min-width: var(--menu-panel-width-final) !important;
+    max-width: var(--menu-panel-width-final) !important;
+    background: #020617 !important;
+    padding: 18px 18px 24px 18px !important;
+    box-sizing: border-box !important;
+    overflow-x: hidden !important;
+}
+
+/* Oculta controles de colapso para que el menú no desaparezca */
+[data-testid="stSidebarCollapseButton"],
+[data-testid="collapsedControl"],
+[data-testid="stSidebarCollapsedControl"],
+button[title="Collapse sidebar"],
+button[title="Close sidebar"],
+button[aria-label="Close sidebar"],
+button[aria-label="Collapse sidebar"] {
+    display: none !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+}
+
+/* El contenido principal parte después del menú: evita que se monte encima */
+div[data-testid="stMain"],
+main,
+section.main,
+[data-testid="stAppViewContainer"] > .main {
+    margin-left: var(--menu-panel-width-final) !important;
+    width: calc(100vw - var(--menu-panel-width-final)) !important;
+    max-width: calc(100vw - var(--menu-panel-width-final)) !important;
+    min-width: 1320px !important;
+    box-sizing: border-box !important;
+    overflow-x: visible !important;
+}
+
+.main .block-container,
+.block-container,
+div[data-testid="stMainBlockContainer"] {
+    max-width: none !important;
+    min-width: 1320px !important;
+    padding-left: 26px !important;
+    padding-right: 26px !important;
+    padding-top: 0px !important;
+    box-sizing: border-box !important;
+}
+
+[data-testid="stAppViewContainer"],
+.stApp {
+    overflow-x: auto !important;
+    background: #eef3f9 !important;
+}
+
+/* Mantiene las columnas en orden al agrandar/achicar o usar zoom */
+[data-testid="stHorizontalBlock"] {
+    flex-wrap: nowrap !important;
+    align-items: stretch !important;
+}
+
+.kpi-card {
+    min-width: 215px !important;
+}
+
+.title-main {
+    white-space: nowrap !important;
+    overflow: visible !important;
+    line-height: 1.05 !important;
+}
+
+/* Menú: botones completos dentro del panel */
+section[data-testid="stSidebar"] .menu-panel-content,
+section[data-testid="stSidebar"] .menu-line,
+section[data-testid="stSidebar"] .menu-footer-box,
+section[data-testid="stSidebar"] div[data-testid="stButton"],
+section[data-testid="stSidebar"] div[data-testid="stSelectbox"],
+section[data-testid="stSidebar"] [data-baseweb="select"],
+section[data-testid="stSidebar"] [data-baseweb="select"] > div,
+section[data-testid="stSidebar"] .menu-active-item {
+    width: var(--menu-inner-width-final) !important;
+    max-width: var(--menu-inner-width-final) !important;
+    min-width: var(--menu-inner-width-final) !important;
+    box-sizing: border-box !important;
+}
+
+section[data-testid="stSidebar"] div[data-testid="stButton"] button {
+    width: var(--menu-inner-width-final) !important;
+    max-width: var(--menu-inner-width-final) !important;
+    min-height: 50px !important;
+    padding: 10px 12px !important;
+    border-radius: 13px !important;
+    background: rgba(15, 23, 42, 0.72) !important;
+    border: 1px solid rgba(147, 197, 253, 0.30) !important;
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    font-size: 15px !important;
+    font-weight: 950 !important;
+    text-align: left !important;
+    white-space: normal !important;
+    overflow: visible !important;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.85) !important;
+}
+
+section[data-testid="stSidebar"] .menu-active-item {
+    min-height: 50px !important;
+    padding: 12px 12px !important;
+    display: flex !important;
+    align-items: center !important;
+    border-radius: 13px !important;
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    background: linear-gradient(135deg, #2563eb 0%, #0ea5e9 100%) !important;
+    border: 1px solid rgba(219, 234, 254, 0.95) !important;
+    box-shadow: 0 8px 18px rgba(37, 99, 235, 0.38) !important;
+    font-size: 15px !important;
+    font-weight: 950 !important;
+    line-height: 1.25 !important;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.70) !important;
+    white-space: normal !important;
+}
+
+/* Selectores de filtros dentro del menú */
+section[data-testid="stSidebar"] div[data-testid="stSelectbox"] label,
+section[data-testid="stSidebar"] div[data-testid="stSelectbox"] label * {
+    color: #dbeafe !important;
+    -webkit-text-fill-color: #dbeafe !important;
+    opacity: 1 !important;
+    font-weight: 950 !important;
+}
+
+section[data-testid="stSidebar"] [data-baseweb="select"] > div {
+    background: #ffffff !important;
+    border-radius: 12px !important;
+    min-height: 44px !important;
+    overflow: hidden !important;
+}
+
+section[data-testid="stSidebar"] [data-baseweb="select"] * {
+    color: #0f172a !important;
+    -webkit-text-fill-color: #0f172a !important;
+    font-weight: 800 !important;
+}
+
+/* Montos y textos fuertes */
+.kpi-value,
+[data-testid="stDataFrame"] {
+    font-variant-numeric: tabular-nums !important;
+}
+
+/* Sello de agua visible sobre fondo principal, sin interferir */
+.saivam-watermark-fixed {
+    position: fixed !important;
+    left: calc(var(--menu-panel-width-final) + ((100vw - var(--menu-panel-width-final)) / 2)) !important;
+    top: 52% !important;
+    transform: translate(-50%, -50%) !important;
+    width: 560px !important;
+    height: 560px !important;
+    background-repeat: no-repeat !important;
+    background-position: center !important;
+    background-size: contain !important;
+    opacity: 0.17 !important;
+    z-index: 8 !important;
+    pointer-events: none !important;
+}
+</style>
+"""
+    st.markdown(css_final, unsafe_allow_html=True)
+
+    if sello_src:
+        html_sello = """
+<div class="saivam-watermark-fixed" style="background-image:url('__SELLO_SRC__');"></div>
+""".replace("__SELLO_SRC__", sello_src)
+        st.markdown(html_sello, unsafe_allow_html=True)
+
+
+
+# =========================================================
+# AJUSTE FINAL V3.8
+# - Sidebar separado del contenido, sin superponerse.
+# - Menú fijo/sticky y más arriba.
+# - Sello de agua SAIVAM usando archivo o carpeta llamada saivam.
+# - Montos CLP con $ a la izquierda.
+# =========================================================
+
+def obtener_ruta_sello_saivam():
+    """Busca la imagen del sello de agua en archivo/carpeta llamada saivam."""
+    candidatos_directos = []
+
+    for base in ["saivam", "SAIVAM", "Saivam"]:
+        candidatos_directos.append(base)
+        for ext in EXTENSIONES_IMAGEN:
+            candidatos_directos.append(base + ext)
+
+    for carpeta in [".", "assets", "imagenes", "images", "img", "fotos", "saivam", "SAIVAM"]:
+        for nombre in ["saivam", "SAIVAM", "logo_saivam", "logo1", "logo"]:
+            for ext in EXTENSIONES_IMAGEN:
+                candidatos_directos.append(os.path.join(carpeta, nombre + ext))
+
+    for candidato in candidatos_directos:
+        if os.path.isfile(candidato):
+            return candidato
+
+    for carpeta in ["saivam", "SAIVAM"]:
+        if os.path.isdir(carpeta):
+            for ext in EXTENSIONES_IMAGEN:
+                archivos = glob.glob(os.path.join(carpeta, "**", "*" + ext), recursive=True)
+                if archivos:
+                    return archivos[0]
+
+    ruta = buscar_imagen_por_nombre("saivam")
+    if ruta and os.path.isfile(ruta):
+        return ruta
+
+    return None
+
+
+def pesos(valor):
+    """Formato CLP definitivo: $ a la izquierda."""
+    try:
+        return f"{int(round(float(valor))):,}".replace(",", ".") + " $"
+    except Exception:
+        return "0 $"
+
+
+def pesos_html(valor):
+    """Formato CLP definitivo para HTML y Plotly."""
+    try:
+        return f"{int(round(float(valor))):,}".replace(",", ".") + " $"
+    except Exception:
+        return "0 $"
+
+
+_aplicar_estilo_v37 = aplicar_estilo
+
+def aplicar_estilo():
+    _aplicar_estilo_v37()
+
+    ruta_sello = obtener_ruta_sello_saivam()
+    sello_src = ""
+    if ruta_sello and os.path.isfile(ruta_sello):
+        sello_b64 = archivo_a_base64(ruta_sello)
+        sello_mime = extension_mime(ruta_sello)
+        if sello_b64:
+            sello_src = f"data:{sello_mime};base64,{sello_b64}"
+
+    css_v38 = """
+<style>
+:root {
+    --menu-width-v38: 318px;
+    --menu-inner-v38: 278px;
+    --content-min-v38: 1320px;
+}
+
+/* Página base con scroll horizontal solo si la ventana queda muy angosta */
+html,
+body,
+.stApp,
+[data-testid="stAppViewContainer"] {
+    background: #eef3f9 !important;
+    overflow-x: auto !important;
+}
+
+/* Sidebar separado del contenido principal: NO queda encima */
+section[data-testid="stSidebar"] {
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    position: sticky !important;
+    top: 0 !important;
+    left: 0 !important;
+    flex: 0 0 var(--menu-width-v38) !important;
+    width: var(--menu-width-v38) !important;
+    min-width: var(--menu-width-v38) !important;
+    max-width: var(--menu-width-v38) !important;
+    height: 100vh !important;
+    min-height: 100vh !important;
+    background: #020617 !important;
+    border-right: 1px solid rgba(147, 197, 253, 0.34) !important;
+    box-shadow: none !important;
+    z-index: 20 !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    transform: none !important;
+    box-sizing: border-box !important;
+}
+
+section[data-testid="stSidebar"] > div,
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+    width: var(--menu-width-v38) !important;
+    min-width: var(--menu-width-v38) !important;
+    max-width: var(--menu-width-v38) !important;
+    background: #020617 !important;
+    padding: 8px 14px 16px 14px !important;
+    box-sizing: border-box !important;
+    overflow-x: hidden !important;
+}
+
+/* Evita controles de colapso que achican el menú */
+[data-testid="stSidebarCollapseButton"],
+[data-testid="collapsedControl"],
+[data-testid="stSidebarCollapsedControl"],
+button[title="Collapse sidebar"],
+button[title="Close sidebar"],
+button[aria-label="Close sidebar"],
+button[aria-label="Collapse sidebar"] {
+    display: none !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+}
+
+/* Contenido principal: queda al lado del menú, nunca debajo */
+[data-testid="stAppViewContainer"] {
+    display: flex !important;
+    align-items: stretch !important;
+}
+
+[data-testid="stAppViewContainer"] > .main,
+div[data-testid="stMain"],
+main,
+section.main {
+    position: relative !important;
+    margin-left: 0 !important;
+    flex: 1 0 auto !important;
+    width: auto !important;
+    min-width: var(--content-min-v38) !important;
+    max-width: none !important;
+    box-sizing: border-box !important;
+    overflow: visible !important;
+    background: #eef3f9 !important;
+    z-index: 2 !important;
+}
+
+.main .block-container,
+.block-container,
+div[data-testid="stMainBlockContainer"] {
+    max-width: none !important;
+    min-width: var(--content-min-v38) !important;
+    padding-top: 0px !important;
+    padding-left: 28px !important;
+    padding-right: 28px !important;
+    padding-bottom: 26px !important;
+    box-sizing: border-box !important;
+}
+
+/* Menú más arriba y con ancho completo dentro del panel */
+section[data-testid="stSidebar"] .menu-brand {
+    margin-top: 0px !important;
+    margin-bottom: 12px !important;
+}
+
+section[data-testid="stSidebar"] .menu-panel-content,
+section[data-testid="stSidebar"] .menu-line,
+section[data-testid="stSidebar"] .menu-footer-box,
+section[data-testid="stSidebar"] div[data-testid="stButton"],
+section[data-testid="stSidebar"] div[data-testid="stSelectbox"],
+section[data-testid="stSidebar"] [data-baseweb="select"],
+section[data-testid="stSidebar"] [data-baseweb="select"] > div,
+section[data-testid="stSidebar"] .menu-active-item {
+    width: var(--menu-inner-v38) !important;
+    max-width: var(--menu-inner-v38) !important;
+    min-width: var(--menu-inner-v38) !important;
+    box-sizing: border-box !important;
+}
+
+section[data-testid="stSidebar"] div[data-testid="stButton"] button,
+section[data-testid="stSidebar"] .menu-active-item {
+    width: var(--menu-inner-v38) !important;
+    min-height: 46px !important;
+    padding: 9px 12px !important;
+    border-radius: 13px !important;
+    font-size: 14.8px !important;
+    font-weight: 950 !important;
+    white-space: normal !important;
+    overflow: visible !important;
+    line-height: 1.20 !important;
+    box-sizing: border-box !important;
+}
+
+/* Mantiene columnas y tarjetas sin romper orden visual */
+[data-testid="stHorizontalBlock"] {
+    flex-wrap: nowrap !important;
+    align-items: stretch !important;
+}
+
+.kpi-card {
+    min-width: 215px !important;
+}
+
+.title-main {
+    white-space: nowrap !important;
+    overflow: visible !important;
+}
+
+/* Sello de agua SAIVAM visible en la página principal */
+.saivam-watermark-v38 {
+    position: fixed !important;
+    left: calc(var(--menu-width-v38) + ((100vw - var(--menu-width-v38)) / 2)) !important;
+    top: 54% !important;
+    transform: translate(-50%, -50%) !important;
+    width: 600px !important;
+    height: 600px !important;
+    background-repeat: no-repeat !important;
+    background-position: center !important;
+    background-size: contain !important;
+    opacity: 0.115 !important;
+    z-index: 50 !important;
+    pointer-events: none !important;
+}
+</style>
+"""
+    st.markdown(css_v38, unsafe_allow_html=True)
+
+    if sello_src:
+        st.markdown(
+            '<div class="saivam-watermark-v38" style="background-image:url(\'' + sello_src + '\');"></div>',
+            unsafe_allow_html=True,
+        )
+
+
+
+# =========================================================
+# AJUSTE FINAL V3.9
+# - Menú izquierdo más ancho para que los ítems calcen completos.
+# - Montos CLP con signo $ a la izquierda en tarjetas, tablas y gráficos.
+# - Total del gráfico donut sin ':' ni barras.
+# =========================================================
+
+VERSION = "1.0"
+
+def pesos(valor):
+    """Formato CLP final: signo $ a la izquierda."""
+    try:
+        return f"{int(round(float(valor))):,}".replace(",", ".") + " $"
+    except Exception:
+        return "0 $"
+
+
+def pesos_html(valor):
+    """Formato CLP para HTML/Plotly sin activar MathJax."""
+    try:
+        return "<span>&#36;</span>&nbsp;" + f"{int(round(float(valor))):,}".replace(",", ".")
+    except Exception:
+        return "<span>&#36;</span>&nbsp;0"
+
+
+def crear_donut_costos(costos_item):
+    fig = go.Figure()
+
+    fig.add_trace(
+        go.Pie(
+            labels=costos_item["Item"],
+            values=costos_item["Costo"],
+            hole=0.64,
+            marker=dict(
+                colors=["#2563eb", "#ffb020", "#55c595"],
+                line=dict(color="white", width=2),
+            ),
+            textinfo="percent",
+            textposition="inside",
+            insidetextorientation="auto",
+            textfont=dict(color="white", size=14, family="Arial Black"),
+            hovertemplate="<b>%{label}</b><br>Monto: %{customdata}<br>Participación: %{percent}<extra></extra>",
+            customdata=[pesos(v) for v in costos_item["Costo"]],
+        )
+    )
+
+    total = float(costos_item["Costo"].sum())
+
+    fig.update_layout(
+        title="Distribución de Costos",
+        height=350,
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        font=dict(color=COLOR_TEXTO),
+        margin=dict(l=10, r=10, t=45, b=10),
+        annotations=[
+            dict(
+                text="Total<br><b>" + pesos_html(total) + "</b>",
+                x=0.5,
+                y=0.5,
+                xref="paper",
+                yref="paper",
+                font_size=15,
+                font_color="#0f172a",
+                showarrow=False,
+                align="center",
+            )
+        ],
+        legend=dict(orientation="v", x=1.02, y=0.72, font=dict(size=12)),
+        uniformtext_minsize=11,
+        uniformtext_mode="hide",
+    )
+
+    return fig
+
+
+_aplicar_estilo_v38_final = aplicar_estilo
+
+def aplicar_estilo():
+    _aplicar_estilo_v38_final()
+
+    st.markdown(
+        """
+<style>
+:root {
+    --menu-width-v39: 370px;
+    --menu-inner-v39: 320px;
+    --content-min-v39: 1320px;
+}
+
+/* Sidebar más ancho, fijo y separado del contenido */
+section[data-testid="stSidebar"] {
+    width: var(--menu-width-v39) !important;
+    min-width: var(--menu-width-v39) !important;
+    max-width: var(--menu-width-v39) !important;
+    flex: 0 0 var(--menu-width-v39) !important;
+    position: sticky !important;
+    top: 0 !important;
+    left: 0 !important;
+    height: 100vh !important;
+    min-height: 100vh !important;
+    background: #020617 !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    z-index: 30 !important;
+    box-sizing: border-box !important;
+}
+
+section[data-testid="stSidebar"] > div,
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+    width: var(--menu-width-v39) !important;
+    min-width: var(--menu-width-v39) !important;
+    max-width: var(--menu-width-v39) !important;
+    padding: 8px 24px 18px 24px !important;
+    background: #020617 !important;
+    box-sizing: border-box !important;
+    overflow-x: hidden !important;
+}
+
+/* El contenido principal queda al lado del menú, no debajo */
+[data-testid="stAppViewContainer"] {
+    display: flex !important;
+    align-items: stretch !important;
+    overflow-x: auto !important;
+}
+
+[data-testid="stAppViewContainer"] > .main,
+div[data-testid="stMain"],
+main,
+section.main {
+    margin-left: 0 !important;
+    flex: 1 0 auto !important;
+    min-width: var(--content-min-v39) !important;
+    width: auto !important;
+    max-width: none !important;
+    position: relative !important;
+    z-index: 2 !important;
+    background: #eef3f9 !important;
+    box-sizing: border-box !important;
+}
+
+.main .block-container,
+.block-container,
+div[data-testid="stMainBlockContainer"] {
+    max-width: none !important;
+    min-width: var(--content-min-v39) !important;
+    padding-top: 0px !important;
+    padding-left: 30px !important;
+    padding-right: 30px !important;
+    box-sizing: border-box !important;
+}
+
+/* Menú más arriba y con ancho suficiente */
+section[data-testid="stSidebar"] .menu-brand {
+    margin-top: 0px !important;
+    margin-bottom: 10px !important;
+}
+
+section[data-testid="stSidebar"] .menu-panel-content,
+section[data-testid="stSidebar"] .menu-line,
+section[data-testid="stSidebar"] .menu-footer-box,
+section[data-testid="stSidebar"] div[data-testid="stButton"],
+section[data-testid="stSidebar"] div[data-testid="stSelectbox"],
+section[data-testid="stSidebar"] [data-baseweb="select"],
+section[data-testid="stSidebar"] [data-baseweb="select"] > div,
+section[data-testid="stSidebar"] .menu-active-item {
+    width: var(--menu-inner-v39) !important;
+    min-width: var(--menu-inner-v39) !important;
+    max-width: var(--menu-inner-v39) !important;
+    box-sizing: border-box !important;
+}
+
+section[data-testid="stSidebar"] div[data-testid="stButton"] button,
+section[data-testid="stSidebar"] .menu-active-item {
+    width: var(--menu-inner-v39) !important;
+    min-width: var(--menu-inner-v39) !important;
+    max-width: var(--menu-inner-v39) !important;
+    min-height: 50px !important;
+    padding: 10px 14px !important;
+    border-radius: 13px !important;
+    font-size: 15px !important;
+    line-height: 1.18 !important;
+    font-weight: 950 !important;
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    box-sizing: border-box !important;
+}
+
+/* Selectores de filtro completos */
+section[data-testid="stSidebar"] [data-baseweb="select"] > div {
+    min-height: 48px !important;
+    height: 48px !important;
+    border-radius: 12px !important;
+}
+
+/* Evita que la cabecera o tarjetas se monten al cambiar zoom */
+[data-testid="stHorizontalBlock"] {
+    flex-wrap: nowrap !important;
+    align-items: stretch !important;
+}
+
+.kpi-card {
+    min-width: 215px !important;
+}
+
+.title-main {
+    white-space: nowrap !important;
+}
+</style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+# =========================================================
+# AJUSTE FINAL V4.0
+# - Menú izquierdo con enunciados alineados más a la izquierda.
+# - Panel izquierdo más estable y separado del contenido principal.
+# - Monto total del gráfico donut con signo $ a la izquierda.
+# =========================================================
+
+VERSION = "1.0"
+
+
+def pesos(valor):
+    """Formato CLP: signo $ siempre a la izquierda."""
+    try:
+        return f"{int(round(float(valor))):,}".replace(",", ".") + " $"
+    except Exception:
+        return "0 $"
+
+
+def pesos_html(valor):
+    """Formato CLP para textos HTML/Plotly, evitando que $ sea interpretado como fórmula."""
+    try:
+        return "&#36;&#8203; " + f"{int(round(float(valor))):,}".replace(",", ".")
+    except Exception:
+        return "&#36;&#8203; 0"
+
+
+def kpi_card(icono, titulo, valor, subtitulo, color_fondo):
+    """Tarjeta KPI con corrección de montos que pudieran venir con $ a la derecha."""
+    valor_txt = str(valor).strip()
+
+    if valor_txt.endswith("$"):
+        valor_txt = "$ " + valor_txt.replace("$", "").strip()
+
+    st.markdown(
+        f"""
+<div class="kpi-card">
+    <div class="kpi-icon" style="background:{color_fondo};">{icono}</div>
+    <div class="kpi-title">{titulo}</div>
+    <div class="kpi-value">{valor_txt}</div>
+    <div class="kpi-sub">{subtitulo}</div>
+</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def crear_donut_costos(costos_item):
+    fig = go.Figure()
+
+    fig.add_trace(
+        go.Pie(
+            labels=costos_item["Item"],
+            values=costos_item["Costo"],
+            hole=0.64,
+            marker=dict(
+                colors=["#2563eb", "#ffb020", "#55c595"],
+                line=dict(color="white", width=2),
+            ),
+            textinfo="percent",
+            textposition="inside",
+            insidetextorientation="auto",
+            textfont=dict(color="white", size=14, family="Arial Black"),
+            hovertemplate="<b>%{label}</b><br>Monto: %{customdata}<br>Participación: %{percent}<extra></extra>",
+            customdata=[pesos(v) for v in costos_item["Costo"]],
+        )
+    )
+
+    total = float(costos_item["Costo"].sum())
+
+    fig.update_layout(
+        title="Distribución de Costos",
+        height=350,
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        font=dict(color=COLOR_TEXTO),
+        margin=dict(l=10, r=10, t=45, b=10),
+        annotations=[
+            dict(
+                text="Total<br><b>" + pesos_html(total) + "</b>",
+                x=0.5,
+                y=0.5,
+                xref="paper",
+                yref="paper",
+                font_size=15,
+                font_color="#0f172a",
+                showarrow=False,
+                align="center",
+            )
+        ],
+        legend=dict(orientation="v", x=1.02, y=0.72, font=dict(size=12)),
+        uniformtext_minsize=11,
+        uniformtext_mode="hide",
+    )
+
+    return fig
+
+
+_aplicar_estilo_v39_final = aplicar_estilo
+
+
+def aplicar_estilo():
+    _aplicar_estilo_v39_final()
+
+    st.markdown(
+        """
+<style>
+:root {
+    --menu-width-v40: 390px;
+    --menu-inner-v40: 360px;
+    --content-min-v40: 1320px;
+}
+
+/* Panel izquierdo fijo, más ancho y separado de la página principal */
+section[data-testid="stSidebar"] {
+    width: var(--menu-width-v40) !important;
+    min-width: var(--menu-width-v40) !important;
+    max-width: var(--menu-width-v40) !important;
+    flex: 0 0 var(--menu-width-v40) !important;
+    position: sticky !important;
+    top: 0 !important;
+    left: 0 !important;
+    height: 100vh !important;
+    min-height: 100vh !important;
+    background: #020617 !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    z-index: 30 !important;
+    box-sizing: border-box !important;
+    border-right: 1px solid rgba(147, 197, 253, 0.35) !important;
+}
+
+section[data-testid="stSidebar"] > div,
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+    width: var(--menu-width-v40) !important;
+    min-width: var(--menu-width-v40) !important;
+    max-width: var(--menu-width-v40) !important;
+    padding: 6px 12px 18px 12px !important;
+    margin: 0 !important;
+    background: #020617 !important;
+    box-sizing: border-box !important;
+    overflow-x: hidden !important;
+}
+
+/* Quita márgenes internos de Streamlit que desplazaban los enunciados hacia el centro */
+section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"],
+section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"] > div,
+section[data-testid="stSidebar"] div[data-testid="element-container"] {
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+    width: var(--menu-inner-v40) !important;
+    max-width: var(--menu-inner-v40) !important;
+    box-sizing: border-box !important;
+}
+
+/* Contenido principal al lado del menú, no debajo */
+[data-testid="stAppViewContainer"] {
+    display: flex !important;
+    align-items: stretch !important;
+    overflow-x: auto !important;
+}
+
+[data-testid="stAppViewContainer"] > .main,
+div[data-testid="stMain"],
+main,
+section.main {
+    margin-left: 0 !important;
+    flex: 1 0 auto !important;
+    min-width: var(--content-min-v40) !important;
+    width: auto !important;
+    max-width: none !important;
+    position: relative !important;
+    z-index: 2 !important;
+    background: #eef3f9 !important;
+    box-sizing: border-box !important;
+}
+
+.main .block-container,
+.block-container,
+div[data-testid="stMainBlockContainer"] {
+    max-width: none !important;
+    min-width: var(--content-min-v40) !important;
+    padding-top: 0 !important;
+    padding-left: 24px !important;
+    padding-right: 24px !important;
+    box-sizing: border-box !important;
+}
+
+/* Encabezado del menú más arriba y alineado a la izquierda */
+section[data-testid="stSidebar"] .menu-panel-content,
+section[data-testid="stSidebar"] .menu-brand,
+section[data-testid="stSidebar"] .menu-line,
+section[data-testid="stSidebar"] .menu-footer-box,
+section[data-testid="stSidebar"] div[data-testid="stButton"],
+section[data-testid="stSidebar"] div[data-testid="stSelectbox"],
+section[data-testid="stSidebar"] [data-baseweb="select"],
+section[data-testid="stSidebar"] [data-baseweb="select"] > div,
+section[data-testid="stSidebar"] .menu-active-item {
+    width: var(--menu-inner-v40) !important;
+    min-width: var(--menu-inner-v40) !important;
+    max-width: var(--menu-inner-v40) !important;
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+    box-sizing: border-box !important;
+}
+
+section[data-testid="stSidebar"] .menu-brand {
+    margin-top: 0 !important;
+    margin-bottom: 10px !important;
+    padding-left: 0 !important;
+    justify-content: flex-start !important;
+}
+
+/* Ítems del menú: enunciados más a la izquierda */
+section[data-testid="stSidebar"] div[data-testid="stButton"] button,
+section[data-testid="stSidebar"] .menu-active-item {
+    width: var(--menu-inner-v40) !important;
+    min-width: var(--menu-inner-v40) !important;
+    max-width: var(--menu-inner-v40) !important;
+    min-height: 50px !important;
+    padding: 10px 16px !important;
+    border-radius: 13px !important;
+    font-size: 15px !important;
+    line-height: 1.18 !important;
+    font-weight: 950 !important;
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    box-sizing: border-box !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: flex-start !important;
+    text-align: left !important;
+}
+
+section[data-testid="stSidebar"] div[data-testid="stButton"] button *,
+section[data-testid="stSidebar"] div[data-testid="stButton"] button p,
+section[data-testid="stSidebar"] .menu-active-item,
+section[data-testid="stSidebar"] .menu-active-item * {
+    text-align: left !important;
+    justify-content: flex-start !important;
+    align-items: center !important;
+    margin-left: 0 !important;
+    margin-right: auto !important;
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    opacity: 1 !important;
+}
+
+/* Filtros completos y alineados */
+section[data-testid="stSidebar"] [data-baseweb="select"] > div {
+    min-height: 48px !important;
+    height: 48px !important;
+    border-radius: 12px !important;
+}
+
+section[data-testid="stSidebar"] div[data-testid="stSelectbox"] label,
+section[data-testid="stSidebar"] div[data-testid="stSelectbox"] label * {
+    text-align: left !important;
+    margin-left: 0 !important;
+}
+
+/* Reafirma que los montos de tarjetas no queden invertidos visualmente */
+.kpi-value {
+    direction: ltr !important;
+    unicode-bidi: isolate !important;
+    text-align: left !important;
+}
+
+/* Mantiene estructura al cambiar zoom */
+div[data-testid="stHorizontalBlock"] {
+    flex-wrap: nowrap !important;
+    align-items: stretch !important;
+}
+
+.title-main {
+    white-space: nowrap !important;
+}
+
+/* =========================================================
+   AJUSTE FINAL V4.1
+   1) Elimina cualquier sello de agua.
+   2) Oculta la barra vertical del menú izquierdo.
+   3) Compacta el menú para que no necesite scroll visible.
+   ========================================================= */
+.stApp::before,
+.stApp::after,
+[data-testid="stAppViewContainer"]::before,
+[data-testid="stAppViewContainer"]::after,
+main::before,
+section.main::before,
+.block-container::before {
+    content: none !important;
+    display: none !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+    background-image: none !important;
+    pointer-events: none !important;
+}
+
+section[data-testid="stSidebar"],
+section[data-testid="stSidebar"] > div,
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+    overflow-y: hidden !important;
+    overflow-x: hidden !important;
+    scrollbar-width: none !important;
+    -ms-overflow-style: none !important;
+}
+
+section[data-testid="stSidebar"]::-webkit-scrollbar,
+section[data-testid="stSidebar"] *::-webkit-scrollbar {
+    width: 0px !important;
+    height: 0px !important;
+    display: none !important;
+    background: transparent !important;
+}
+
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+    padding-top: 0px !important;
+    padding-bottom: 10px !important;
+}
+
+section[data-testid="stSidebar"] .menu-brand {
+    margin-top: 0px !important;
+    margin-bottom: 8px !important;
+}
+
+section[data-testid="stSidebar"] .menu-line {
+    margin-top: 8px !important;
+    margin-bottom: 10px !important;
+}
+
+section[data-testid="stSidebar"] div[data-testid="stButton"] button,
+section[data-testid="stSidebar"] .menu-active-item {
+    min-height: 46px !important;
+    height: 46px !important;
+    margin-bottom: 5px !important;
+    padding-top: 8px !important;
+    padding-bottom: 8px !important;
+}
+
+section[data-testid="stSidebar"] [data-baseweb="select"] > div {
+    min-height: 44px !important;
+    height: 44px !important;
+}
+
+section[data-testid="stSidebar"] .menu-footer-box {
+    margin-top: 10px !important;
+    padding: 12px !important;
+}
+</style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+# =========================================================
+# AJUSTE FINAL V4.2
+# - Elimina definitivamente cualquier sello de agua SAIVAM.
+# - Mantiene el logo superior normal, pero oculta solo las marcas de agua.
+# - Refuerza que el menú izquierdo no muestre barra de desplazamiento.
+# =========================================================
+
+VERSION = "1.0"
+
+_aplicar_estilo_v41_final = aplicar_estilo
+
+
+def aplicar_estilo():
+    _aplicar_estilo_v41_final()
+
+    st.markdown(
+        """
+<style>
+/* ELIMINACIÓN DEFINITIVA DE SELLOS DE AGUA */
+.saivam-watermark-fixed,
+.saivam-watermark-v38,
+div[class*="watermark"],
+div[class*="Watermark"],
+div[class*="sello"],
+div[class*="Sello"],
+.stApp::before,
+.stApp::after,
+[data-testid="stAppViewContainer"]::before,
+[data-testid="stAppViewContainer"]::after,
+main::before,
+main::after,
+section.main::before,
+section.main::after,
+.block-container::before,
+.block-container::after {
+    content: none !important;
+    display: none !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+    background: none !important;
+    background-image: none !important;
+    pointer-events: none !important;
+    width: 0 !important;
+    height: 0 !important;
+    min-width: 0 !important;
+    min-height: 0 !important;
+    max-width: 0 !important;
+    max-height: 0 !important;
+    position: absolute !important;
+    z-index: -9999 !important;
+}
+
+/* Evita que imágenes tipo sello insertadas en markdown queden flotando al centro */
+div[data-testid="stMarkdownContainer"] .saivam-watermark-fixed,
+div[data-testid="stMarkdownContainer"] .saivam-watermark-v38,
+div[data-testid="stMarkdownContainer"] div[class*="watermark"],
+div[data-testid="stMarkdownContainer"] div[class*="sello"] {
+    display: none !important;
+    background-image: none !important;
+}
+
+/* Menú izquierdo sin barra visible */
+section[data-testid="stSidebar"],
+section[data-testid="stSidebar"] > div,
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+    overflow-y: hidden !important;
+    overflow-x: hidden !important;
+    scrollbar-width: none !important;
+    -ms-overflow-style: none !important;
+}
+
+section[data-testid="stSidebar"]::-webkit-scrollbar,
+section[data-testid="stSidebar"] *::-webkit-scrollbar {
+    width: 0 !important;
+    height: 0 !important;
+    display: none !important;
+}
+
+/* Mantiene página principal limpia, sin fondos superpuestos */
+[data-testid="stAppViewContainer"] > .main,
+div[data-testid="stMain"],
+main,
+section.main,
+.main .block-container,
+.block-container {
+    background-image: none !important;
+}
+</style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+
+
+# =========================================================
+# AJUSTE FINAL V4.7
+# - Sello de agua SAIVAM cubre completo el fondo claro de la página principal.
+# - Queda encima de tablas, gráficos y tarjetas sin bloquear clics.
+# - No invade el menú izquierdo.
+# - Mantiene montos con signo $ a la izquierda.
+# =========================================================
+
+VERSION = "1.0"
+
+_aplicar_estilo_v45_base = aplicar_estilo
+
+
+def pesos(valor):
+    """Formato CLP: signo $ siempre a la izquierda."""
+    try:
+        return f"{int(round(float(valor))):,}".replace(",", ".") + " $"
+    except Exception:
+        return "0 $"
+
+
+def pesos_html(valor):
+    """Formato CLP para HTML/Plotly."""
+    try:
+        return f"{int(round(float(valor))):,}".replace(",", ".") + " $"
+    except Exception:
+        return "0 $"
+
+
+def kpi_card(icono, titulo, valor, subtitulo, color_fondo):
+    """Tarjeta KPI con corrección para que $ quede a la izquierda."""
+    valor_txt = str(valor).strip()
+
+    if valor_txt.endswith("$"):
+        valor_txt = "$ " + valor_txt.replace("$", "").strip()
+
+    if valor_txt.startswith("＄"):
+        valor_txt = "$ " + valor_txt.replace("＄", "").strip()
+
+    st.markdown(
+        f"""
+<div class="kpi-card">
+    <div class="kpi-icon" style="background:{color_fondo};">{icono}</div>
+    <div class="kpi-title">{titulo}</div>
+    <div class="kpi-value">{valor_txt}</div>
+    <div class="kpi-sub">{subtitulo}</div>
+</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def crear_donut_costos(costos_item):
+    fig = go.Figure()
+
+    fig.add_trace(
+        go.Pie(
+            labels=costos_item["Item"],
+            values=costos_item["Costo"],
+            hole=0.64,
+            marker=dict(
+                colors=["#2563eb", "#ffb020", "#55c595"],
+                line=dict(color="white", width=2),
+            ),
+            textinfo="percent",
+            textposition="inside",
+            insidetextorientation="auto",
+            textfont=dict(color="white", size=14, family="Arial Black"),
+            hovertemplate="<b>%{label}</b><br>Monto: %{customdata}<br>Participación: %{percent}<extra></extra>",
+            customdata=[pesos(v) for v in costos_item["Costo"]],
+        )
+    )
+
+    total = float(costos_item["Costo"].sum())
+
+    fig.update_layout(
+        title="Distribución de Costos",
+        height=350,
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        font=dict(color=COLOR_TEXTO),
+        margin=dict(l=10, r=10, t=45, b=10),
+        annotations=[
+            dict(
+                text="Total<br><b>" + pesos_html(total) + "</b>",
+                x=0.5,
+                y=0.5,
+                xref="paper",
+                yref="paper",
+                font_size=15,
+                font_color="#0f172a",
+                showarrow=False,
+                align="center",
+            )
+        ],
+        legend=dict(orientation="v", x=1.02, y=0.72, font=dict(size=12)),
+        uniformtext_minsize=11,
+        uniformtext_mode="hide",
+    )
+
+    return fig
+
+
+def aplicar_estilo():
+    _aplicar_estilo_v45_base()
+
+    ruta_sello = obtener_ruta_sello_saivam()
+    sello_src = ""
+
+    if ruta_sello and os.path.isfile(ruta_sello):
+        sello_b64 = archivo_a_base64(ruta_sello)
+        sello_mime = extension_mime(ruta_sello)
+        if sello_b64:
+            sello_src = f"data:{sello_mime};base64,{sello_b64}"
+
+    st.markdown(
+        """
+<style>
+/* =========================================================
+   SELLO DE AGUA SAIVAM V4.9
+   Cubre completo el fondo claro de la página principal.
+   No cubre el menú izquierdo.
+   ========================================================= */
+.saivam-marca-principal {
+    position: fixed !important;
+    top: 0 !important;
+    left: 390px !important;
+    width: calc(100vw - 390px) !important;
+    height: 100vh !important;
+    transform: none !important;
+    background-repeat: no-repeat !important;
+    background-position: center center !important;
+    background-size: cover !important;
+    opacity: 0.20 !important;
+    z-index: 50 !important;
+    pointer-events: none !important;
+    user-select: none !important;
+    display: block !important;
+    visibility: visible !important;
+}
+
+/* Deja el menú por encima y separado del sello */
+section[data-testid="stSidebar"] {
+    z-index: 1000 !important;
+}
+
+/* El contenido principal queda debajo del sello para que la marca se vea sobre tablas y gráficos */
+[data-testid="stAppViewContainer"] > .main,
+div[data-testid="stMain"],
+main,
+section.main,
+.main .block-container,
+.block-container {
+    position: relative !important;
+    z-index: 5 !important;
+}
+
+/* Mantiene el ancho del menú consistente con el sello */
+section[data-testid="stSidebar"] {
+    width: 390px !important;
+    min-width: 390px !important;
+    max-width: 390px !important;
+}
+
+[data-testid="stAppViewContainer"] > .main,
+div[data-testid="stMain"],
+section.main,
+main {
+    margin-left: 390px !important;
+    width: calc(100vw - 390px) !important;
+    max-width: calc(100vw - 390px) !important;
+}
+
+/* =========================================================
+   AJUSTE FINAL V5.0: MENÚ MÁS ANGOSTO Y MÁS ARRIBA
+   ========================================================= */
+:root {
+    --menu-panel-width-final: 300px !important;
+    --menu-inner-width-final: 262px !important;
+    --menu-width-v38: 300px !important;
+    --menu-inner-v38: 262px !important;
+    --menu-panel-width: 300px !important;
+    --menu-inner-width: 262px !important;
+}
+
+section[data-testid="stSidebar"] {
+    width: 300px !important;
+    min-width: 300px !important;
+    max-width: 300px !important;
+    padding-top: 0px !important;
+    overflow-y: hidden !important;
+    overflow-x: hidden !important;
+}
+
+section[data-testid="stSidebar"] > div,
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+    width: 300px !important;
+    min-width: 300px !important;
+    max-width: 300px !important;
+    padding: 8px 12px 12px 12px !important;
+    overflow-y: hidden !important;
+    overflow-x: hidden !important;
+    box-sizing: border-box !important;
+}
+
+/* Sube cabecera y nombres del menú */
+section[data-testid="stSidebar"] .menu-panel-content,
+section[data-testid="stSidebar"] .menu-brand {
+    width: 262px !important;
+    max-width: 262px !important;
+    margin-top: 0px !important;
+    margin-bottom: 8px !important;
+    padding-top: 0px !important;
+}
+
+section[data-testid="stSidebar"] .menu-brand {
+    transform: translateY(-6px) !important;
+}
+
+section[data-testid="stSidebar"] .menu-line {
+    width: 262px !important;
+    max-width: 262px !important;
+    margin: 6px 0 8px 0 !important;
+}
+
+section[data-testid="stSidebar"] .menu-footer-box,
+section[data-testid="stSidebar"] div[data-testid="stButton"],
+section[data-testid="stSidebar"] div[data-testid="stSelectbox"],
+section[data-testid="stSidebar"] [data-baseweb="select"],
+section[data-testid="stSidebar"] [data-baseweb="select"] > div,
+section[data-testid="stSidebar"] .menu-active-item {
+    width: 262px !important;
+    max-width: 262px !important;
+    min-width: 262px !important;
+    box-sizing: border-box !important;
+}
+
+section[data-testid="stSidebar"] div[data-testid="stButton"] {
+    margin-bottom: 4px !important;
+}
+
+section[data-testid="stSidebar"] div[data-testid="stButton"] button,
+section[data-testid="stSidebar"] .menu-active-item {
+    width: 262px !important;
+    max-width: 262px !important;
+    min-width: 262px !important;
+    min-height: 43px !important;
+    height: 43px !important;
+    padding: 8px 12px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: flex-start !important;
+    text-align: left !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    font-size: 14px !important;
+    line-height: 1.1 !important;
+}
+
+section[data-testid="stSidebar"] div[data-testid="stSelectbox"] {
+    margin-top: 0px !important;
+    margin-bottom: 4px !important;
+}
+
+section[data-testid="stSidebar"] [data-baseweb="select"] > div {
+    min-height: 40px !important;
+    height: 40px !important;
+}
+
+section[data-testid="stSidebar"] .menu-footer-box {
+    margin-top: 8px !important;
+    padding: 10px 12px !important;
+}
+
+section[data-testid="stSidebar"] .menu-info {
+    font-size: 11.4px !important;
+    line-height: 1.45 !important;
+}
+
+/* Contenido principal separado según el nuevo ancho del menú */
+[data-testid="stAppViewContainer"] > .main,
+div[data-testid="stMain"],
+section.main,
+main {
+    margin-left: 300px !important;
+    width: calc(100vw - 300px) !important;
+    max-width: calc(100vw - 300px) !important;
+}
+
+.main .block-container,
+.block-container,
+div[data-testid="stMainBlockContainer"] {
+    padding-left: 24px !important;
+    padding-right: 24px !important;
+}
+
+/* Sello alineado con el nuevo inicio del contenido */
+.saivam-marca-principal {
+    left: 300px !important;
+    width: calc(100vw - 300px) !important;
+}
+
+@media (max-width: 1100px) {
+    section[data-testid="stSidebar"] {
+        width: 300px !important;
+        min-width: 300px !important;
+        max-width: 300px !important;
+    }
+
+    [data-testid="stAppViewContainer"] > .main,
+    div[data-testid="stMain"],
+    section.main,
+    main {
+        margin-left: 300px !important;
+        width: calc(100vw - 300px) !important;
+        max-width: calc(100vw - 300px) !important;
+    }
+
+    .saivam-marca-principal {
+        left: 300px !important;
+        width: calc(100vw - 300px) !important;
+    }
+}
+</style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # La marca de agua de pantalla completa se desactiva para evitar
+    # que aparezca como portada durante la carga inicial.
+
+# =========================================================
+# EJECUCIÓN FINAL V4.8
+# Importante: se ejecuta al final para que el último aplicar_estilo()
+# incluya el sello de agua SAIVAM más visible, cubriendo el fondo claro y por encima del contenido.
+# =========================================================
+
+aplicar_estilo()
+
+# =========================================================
+# AJUSTE FINAL MENÚ IZQUIERDO - SIN CAMBIAR ANCHO
+# Corrige espacio superior, título y separación entre items.
+# =========================================================
+st.markdown(
+    """
+<style>
+/* Elimina el espacio superior del sidebar sin modificar su ancho */
+section[data-testid="stSidebar"] {
+    top: 0px !important;
+    padding-top: 0px !important;
+    margin-top: 0px !important;
+}
+
+section[data-testid="stSidebar"] > div,
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+    padding-top: 4px !important;
+    margin-top: 0px !important;
+}
+
+/* Quita márgenes internos que Streamlit deja arriba */
+section[data-testid="stSidebar"] [data-testid="stVerticalBlock"],
+section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] > div,
+section[data-testid="stSidebar"] div[data-testid="element-container"] {
+    padding-top: 0px !important;
+    margin-top: 0px !important;
+}
+
+/* Título del menú claro y sin corte */
+section[data-testid="stSidebar"] .menu-panel-content {
+    margin-top: 0px !important;
+    padding-top: 0px !important;
+    overflow: visible !important;
+}
+
+section[data-testid="stSidebar"] .menu-brand {
+    transform: none !important;
+    margin-top: 4px !important;
+    margin-bottom: 10px !important;
+    padding-top: 0px !important;
+    min-height: 52px !important;
+    overflow: visible !important;
+    align-items: center !important;
+}
+
+section[data-testid="stSidebar"] .menu-icon {
+    width: 48px !important;
+    height: 48px !important;
+    min-width: 48px !important;
+    flex: 0 0 48px !important;
+    font-size: 25px !important;
+}
+
+section[data-testid="stSidebar"] .menu-icon-img {
+    width: 44px !important;
+    height: 44px !important;
+    min-width: 44px !important;
+    flex: 0 0 44px !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    border: none !important;
+    border-radius: 16px !important;
+    overflow: hidden !important;
+}
+
+section[data-testid="stSidebar"] .menu-icon-img img {
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: contain !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+
+section[data-testid="stSidebar"] .menu-title,
+section[data-testid="stSidebar"] .menu-title * {
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    font-size: 12.6px !important;
+    line-height: 1.18 !important;
+    font-weight: 950 !important;
+    letter-spacing: 0.25px !important;
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+}
+
+section[data-testid="stSidebar"] .menu-subtitle,
+section[data-testid="stSidebar"] .menu-subtitle * {
+    color: #bfdbfe !important;
+    -webkit-text-fill-color: #bfdbfe !important;
+    font-size: 10.8px !important;
+    line-height: 1.15 !important;
+    font-weight: 950 !important;
+    margin-top: 4px !important;
+    white-space: normal !important;
+    overflow: visible !important;
+}
+
+/* Línea bajo título más ordenada */
+section[data-testid="stSidebar"] .menu-line {
+    margin-top: 8px !important;
+    margin-bottom: 12px !important;
+}
+
+/* Separación correcta entre Dashboard Ejecutivo y Equipos */
+section[data-testid="stSidebar"] .menu-active-item {
+    min-height: 43px !important;
+    height: auto !important;
+    display: flex !important;
+    align-items: center !important;
+    margin-top: 0px !important;
+    margin-bottom: 10px !important;
+    padding-top: 10px !important;
+    padding-bottom: 10px !important;
+    line-height: 1.20 !important;
+    overflow: hidden !important;
+}
+
+section[data-testid="stSidebar"] div[data-testid="stButton"] {
+    margin-top: 0px !important;
+    margin-bottom: 8px !important;
+}
+
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button,
+section[data-testid="stSidebar"] div[data-testid="stButton"] button {
+    min-height: 43px !important;
+    height: auto !important;
+    padding-top: 10px !important;
+    padding-bottom: 10px !important;
+    line-height: 1.20 !important;
+    display: flex !important;
+    align-items: center !important;
+}
+
+/* Mantiene todos los textos del menú legibles */
+section[data-testid="stSidebar"] .menu-active-item,
+section[data-testid="stSidebar"] .menu-active-item *,
+section[data-testid="stSidebar"] div[data-testid="stButton"] button,
+section[data-testid="stSidebar"] div[data-testid="stButton"] button * {
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    opacity: 1 !important;
+    font-weight: 950 !important;
+}
+</style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+
+# =========================================================
+# CORRECCIÓN DEFINITIVA MENÚ IZQUIERDO - SIN ESPACIO SUPERIOR
+# No modifica el ancho del menú. Solo sube el contenido interno.
+# =========================================================
+st.markdown(
+    """
+<style>
+/* 1) Sidebar pegado arriba */
+section[data-testid="stSidebar"] {
+    top: 0px !important;
+    margin-top: 0px !important;
+    padding-top: 0px !important;
+}
+
+/* 2) El contenedor interno de Streamlit a veces deja un espacio invisible arriba.
+      Este ajuste sube TODO el contenido del menú sin tocar el ancho. */
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+    padding-top: 0px !important;
+    margin-top: 0px !important;
+    transform: translateY(-72px) !important;
+}
+
+/* 3) Evita que el primer bloque agregue margen superior */
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] > div:first-child,
+section[data-testid="stSidebar"] [data-testid="stVerticalBlock"]:first-child,
+section[data-testid="stSidebar"] div[data-testid="element-container"]:first-child {
+    padding-top: 0px !important;
+    margin-top: 0px !important;
+}
+
+/* 4) Cabecera clara, visible y sin corte */
+section[data-testid="stSidebar"] .menu-panel-content {
+    margin-top: 0px !important;
+    padding-top: 0px !important;
+    overflow: visible !important;
+}
+
+section[data-testid="stSidebar"] .menu-brand {
+    margin-top: 0px !important;
+    margin-bottom: 8px !important;
+    padding-top: 0px !important;
+    transform: none !important;
+    min-height: 52px !important;
+    align-items: center !important;
+    overflow: visible !important;
+}
+
+section[data-testid="stSidebar"] .menu-title,
+section[data-testid="stSidebar"] .menu-title * {
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    opacity: 1 !important;
+    font-size: 12.6px !important;
+    line-height: 1.15 !important;
+    font-weight: 950 !important;
+    letter-spacing: 0.20px !important;
+    white-space: normal !important;
+    overflow: visible !important;
+}
+
+section[data-testid="stSidebar"] .menu-subtitle,
+section[data-testid="stSidebar"] .menu-subtitle * {
+    color: #bfdbfe !important;
+    -webkit-text-fill-color: #bfdbfe !important;
+    opacity: 1 !important;
+    font-size: 10.8px !important;
+    line-height: 1.15 !important;
+    font-weight: 950 !important;
+    margin-top: 4px !important;
+    white-space: normal !important;
+    overflow: visible !important;
+}
+
+/* 5) Línea y separación entre Dashboard Ejecutivo y Equipos */
+section[data-testid="stSidebar"] .menu-line {
+    margin-top: 8px !important;
+    margin-bottom: 12px !important;
+}
+
+section[data-testid="stSidebar"] .menu-active-item {
+    margin-top: 0px !important;
+    margin-bottom: 10px !important;
+    min-height: 43px !important;
+    height: auto !important;
+    padding-top: 10px !important;
+    padding-bottom: 10px !important;
+    display: flex !important;
+    align-items: center !important;
+    line-height: 1.20 !important;
+}
+
+section[data-testid="stSidebar"] div[data-testid="stButton"] {
+    margin-top: 0px !important;
+    margin-bottom: 8px !important;
+}
+
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button,
+section[data-testid="stSidebar"] div[data-testid="stButton"] button {
+    min-height: 43px !important;
+    height: auto !important;
+    padding-top: 10px !important;
+    padding-bottom: 10px !important;
+    display: flex !important;
+    align-items: center !important;
+    line-height: 1.20 !important;
+}
+
+/* 6) En pantallas bajas, deja scroll vertical para que no se pierdan filtros inferiores */
+section[data-testid="stSidebar"] {
+    overflow-y: auto !important;
+}
+</style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+# =========================================================
+# AJUSTE V5.1 - COSTOS, DOCUMENTOS Y GASTOS COMPLEMENTARIOS
+# =========================================================
+
+VERSION = "1.0"
+
+
+def pesos(valor):
+    """Formato CLP único: signo $ siempre a la izquierda."""
+    try:
+        return f"{int(round(float(valor))):,}".replace(",", ".") + " $"
+    except Exception:
+        return "0 $"
+
+
+def pesos_html(valor):
+    """Formato CLP para textos HTML/Plotly con $ a la izquierda."""
+    return pesos(valor)
+
+
+def kpi_card(icono, titulo, valor, subtitulo, color_fondo):
+    """Tarjeta KPI: corrige cualquier monto que venga con $ al final."""
+    valor_txt = str(valor).strip()
+    if valor_txt.endswith("$"):
+        valor_txt = "$ " + valor_txt.replace("$", "").strip()
+    if valor_txt.startswith("＄"):
+        valor_txt = "$ " + valor_txt.replace("＄", "").strip()
+    st.markdown(
+        f"""
+<div class="kpi-card">
+    <div class="kpi-icon" style="background:{color_fondo};">{icono}</div>
+    <div class="kpi-title">{escape_html(titulo)}</div>
+    <div class="kpi-value">{escape_html(valor_txt)}</div>
+    <div class="kpi-sub">{escape_html(subtitulo)}</div>
+</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def categoria_costo_gasto(tipo_gasto, descripcion="", mantencion=""):
+    """Clasificación final para el consolidado.
+    Si Mantención viene como Preventiva/Correctiva, manda el costo a ese grupo,
+    aunque Tipo_Gasto diga Repuesto. Repuesto queda como Gastos Adicionales.
+    """
+    tipo_norm = normalizar_tipo_gasto(tipo_gasto)
+    mant = tipo_mantencion_desde_gasto(tipo_norm, descripcion, mantencion)
+
+    if mant in ["Preventiva", "Correctiva"]:
+        return mant
+
+    if tipo_norm == "Administrativo":
+        return "Administrativos"
+
+    if tipo_norm == "Repuesto":
+        return "Gastos Adicionales"
+
+    if tipo_norm == "Combustible":
+        return "Combustible"
+
+    if tipo_norm in ["Sin tipo", ""]:
+        return "Gastos Adicionales"
+
+    if tipo_norm in ["Mantención Preventiva", "Mantención Correctiva"]:
+        return "Preventiva" if "Preventiva" in tipo_norm else "Correctiva"
+
+    return tipo_norm
+
+
+def construir_consolidado_costos(mantenciones, gastos):
+    partes = []
+
+    if isinstance(mantenciones, pd.DataFrame) and not mantenciones.empty and "Costo_CLP" in mantenciones.columns:
+        mant = mantenciones.copy()
+        if "Tipo_Mantencion" not in mant.columns:
+            mant["Tipo_Mantencion"] = mant.get("Mantencion", "Sin tipo")
+        mant["Item"] = mant["Tipo_Mantencion"].apply(normalizar_tipo_mantencion)
+        mant["Item"] = mant["Item"].replace({"Predictiva": "Preventiva", "Mantención": "Preventiva"})
+        mant["Costo"] = mant["Costo_CLP"].apply(limpiar_numero)
+        partes.append(mant[["Item", "Costo"]])
+
+    if isinstance(gastos, pd.DataFrame) and not gastos.empty and "Costo_CLP" in gastos.columns:
+        gas = gastos.copy()
+        for col, default in [("Tipo_Gasto", "Sin tipo"), ("Descripcion", ""), ("Mantencion", "")]:
+            if col not in gas.columns:
+                gas[col] = default
+        gas["Tipo_Gasto"] = gas["Tipo_Gasto"].apply(normalizar_tipo_gasto)
+        gas["Item"] = gas.apply(
+            lambda x: categoria_costo_gasto(x.get("Tipo_Gasto", ""), x.get("Descripcion", ""), x.get("Mantencion", "")),
+            axis=1,
+        )
+        gas["Costo"] = gas["Costo_CLP"].apply(limpiar_numero)
+        gas = gas[gas["Item"] != "Combustible"].copy()
+        partes.append(gas[["Item", "Costo"]])
+
+    if not partes:
+        return pd.DataFrame(columns=["Item", "Costo"])
+
+    salida = pd.concat(partes, ignore_index=True)
+    salida = salida[salida["Costo"] > 0].copy()
+    if salida.empty:
+        return pd.DataFrame(columns=["Item", "Costo"])
+
+    salida = salida.groupby("Item", as_index=False)["Costo"].sum()
+    orden = ["Correctiva", "Preventiva", "Administrativos", "Gastos Adicionales"]
+    salida["_orden"] = salida["Item"].apply(lambda x: orden.index(x) if x in orden else len(orden))
+    salida = salida.sort_values(["_orden", "Costo"], ascending=[True, False]).drop(columns=["_orden"])
+    return salida
+
+
+def crear_donut_costos(costos_item):
+    """Gráfico de dona centrado, con leyenda legible y sin duplicar el título del panel."""
+    fig = go.Figure()
+
+    if costos_item is None or costos_item.empty:
+        fig.update_layout(
+            height=380,
+            paper_bgcolor="rgba(255,255,255,0.90)",
+            plot_bgcolor="rgba(255,255,255,0.90)",
+            annotations=[
+                dict(
+                    text="Sin costos",
+                    x=0.5,
+                    y=0.5,
+                    showarrow=False,
+                    font_size=18,
+                    font_color="#0f172a",
+                )
+            ],
+            margin=dict(l=10, r=10, t=10, b=10),
+        )
+        return fig
+
+    total = float(costos_item["Costo"].sum())
+
+    fig.add_trace(
+        go.Pie(
+            labels=costos_item["Item"],
+            values=costos_item["Costo"],
+            hole=0.62,
+            sort=False,
+            direction="clockwise",
+            textinfo="percent",
+            textposition="inside",
+            insidetextorientation="radial",
+            textfont=dict(color="white", size=16, family="Arial Black"),
+            hovertemplate="<b>%{label}</b><br>Monto: %{customdata}<br>Participación: %{percent}<extra></extra>",
+            customdata=[pesos(v) for v in costos_item["Costo"]],
+            # Dona centrada y con espacio inferior para la leyenda.
+            domain=dict(x=[0.08, 0.92], y=[0.20, 0.98]),
+            showlegend=True,
+        )
+    )
+
+    fig.update_layout(
+        height=380,
+        paper_bgcolor="rgba(255,255,255,0.90)",
+        plot_bgcolor="rgba(255,255,255,0.90)",
+        font=dict(color="#0f172a", size=13),
+        margin=dict(l=8, r=8, t=8, b=60),
+        annotations=[
+            dict(
+                text="Total<br><b>" + pesos(total) + "</b>",
+                x=0.50,
+                y=0.59,
+                xref="paper",
+                yref="paper",
+                font_size=15,
+                font_color="#0f172a",
+                showarrow=False,
+                align="center",
+            )
+        ],
+        legend=dict(
+            title=dict(text="Tipo de costo", font=dict(size=13, color="#0f172a")),
+            orientation="h",
+            x=0.50,
+            y=-0.06,
+            xanchor="center",
+            yanchor="top",
+            font=dict(size=13, color="#0f172a", family="Arial"),
+            bgcolor="rgba(255,255,255,0.82)",
+            bordercolor="rgba(15,23,42,0.16)",
+            borderwidth=1,
+            itemclick=False,
+            itemdoubleclick=False,
+        ),
+        uniformtext_minsize=11,
+        uniformtext_mode="hide",
+    )
+    return fig
+
+def crear_barra_costos(costos_item):
+    if costos_item is None or costos_item.empty:
+        return aplicar_formato_grafico(go.Figure(), 360)
+
+    datos = costos_item.copy()
+    datos["Costo_Millones"] = datos["Costo"].apply(limpiar_numero) / 1_000_000
+
+    fig = px.bar(
+        datos,
+        x="Item",
+        y="Costo_Millones",
+        text=[pesos(v) for v in datos["Costo"]],
+        template="plotly_white",
+        title="Costo por categoría",
+        custom_data=["Costo"],
+    )
+    fig.update_traces(
+        textposition="outside",
+        hovertemplate="Categoría: %{x}<br>Monto: %{customdata[0]:,.0f} $<br>Millones CLP: %{y:.2f} M<extra></extra>",
+    )
+    fig.update_layout(
+        xaxis_title="Categoría",
+        yaxis_title="Millones CLP",
+        uniformtext_minsize=10,
+        uniformtext_mode="hide",
+        margin=dict(l=10, r=10, t=55, b=10),
+    )
+    fig.update_yaxes(tickformat=",.1f", ticksuffix=" M", separatethousands=True)
+    return aplicar_formato_grafico(fig, 380)
+
+
+def preparar_tabla_repuestos(gastos):
+    mostrar = gastos.copy()
+
+    if "Equipo" in mostrar.columns:
+        equipo_txt = mostrar["Equipo"].fillna("").astype(str).str.strip().str.lower()
+    else:
+        equipo_txt = pd.Series([""] * len(mostrar), index=mostrar.index)
+
+    if "Descripcion" in mostrar.columns:
+        desc_txt = mostrar["Descripcion"].fillna("").astype(str).str.strip().str.lower()
+    else:
+        desc_txt = pd.Series([""] * len(mostrar), index=mostrar.index)
+
+    costo_num = mostrar["Costo_CLP"].apply(limpiar_numero) if "Costo_CLP" in mostrar.columns else pd.Series([0] * len(mostrar), index=mostrar.index)
+    mostrar = mostrar[(~equipo_txt.isin(["", "none", "nan"])) | (~desc_txt.isin(["", "none", "nan"])) | (costo_num > 0)].copy()
+
+    if "Clasificacion_Costo" not in mostrar.columns:
+        mostrar["Clasificacion_Costo"] = mostrar.apply(
+            lambda x: categoria_costo_gasto(x.get("Tipo_Gasto", ""), x.get("Descripcion", ""), x.get("Mantencion", "")),
+            axis=1,
+        )
+    else:
+        mostrar["Clasificacion_Costo"] = mostrar.apply(
+            lambda x: categoria_costo_gasto(x.get("Tipo_Gasto", ""), x.get("Descripcion", ""), x.get("Mantencion", "")),
+            axis=1,
+        )
+
+    if "Fecha" in mostrar.columns:
+        mostrar["Fecha"] = mostrar["Fecha"].apply(fecha_texto)
+    if "Costo_CLP" in mostrar.columns:
+        mostrar["Costo_CLP"] = mostrar["Costo_CLP"].apply(pesos)
+
+    columnas_orden = [
+        "Fecha", "Equipo", "Mantencion", "Tipo_Gasto", "Clasificacion_Costo",
+        "Descripcion", "Proveedor", "Costo_CLP", "Documento_Respaldo", "Observacion", "Mes", "Año"
+    ]
+    columnas_orden = [c for c in columnas_orden if c in mostrar.columns]
+    mostrar = mostrar[columnas_orden].copy()
+    mostrar = mostrar.rename(columns={
+        "Mantencion": "Mantención",
+        "Tipo_Gasto": "Tipo gasto",
+        "Clasificacion_Costo": "Consolidado",
+        "Descripcion": "Descripción",
+        "Costo_CLP": "Costo",
+        "Documento_Respaldo": "Documento respaldo",
+        "Observacion": "Observación",
+    })
+    return mostrar
+
+
+def pagina_repuestos(gastos_f):
+    st.markdown('<div class="section-head"><div class="panel-title page-section-title">Gastos Adicionales</div><div class="panel-subtitle">Repuestos, administrativos y gastos asociados a mantenciones preventivas/correctivas.</div></div>', unsafe_allow_html=True)
+    # st.caption("Repuestos, administrativos y gastos adicionales asociados a mantenciones preventivas/correctivas.")
+
+    gastos_sin_combustible = gastos_no_combustible(gastos_f)
+    if gastos_sin_combustible.empty:
+        st.info("No existen gastos adicionales para el filtro aplicado.")
+        return
+
+    gastos_sin_combustible = gastos_sin_combustible.copy()
+    if "Clasificacion_Costo" not in gastos_sin_combustible.columns:
+        gastos_sin_combustible["Clasificacion_Costo"] = ""
+    gastos_sin_combustible["Clasificacion_Costo"] = gastos_sin_combustible.apply(
+        lambda x: categoria_costo_gasto(x.get("Tipo_Gasto", ""), x.get("Descripcion", ""), x.get("Mantencion", "")),
+        axis=1,
+    )
+
+    tipos = sorted([t for t in gastos_sin_combustible["Clasificacion_Costo"].dropna().astype(str).unique() if t.strip() != ""])
+    filtro_tipo_gasto = st.selectbox("Filtrar por consolidado", ["Todos"] + tipos)
+
+    gastos_vista = gastos_sin_combustible.copy()
+    if filtro_tipo_gasto != "Todos":
+        gastos_vista = gastos_vista[gastos_vista["Clasificacion_Costo"] == filtro_tipo_gasto].copy()
+
+    resumen = gastos_vista.groupby("Clasificacion_Costo", as_index=False)["Costo_CLP"].sum().sort_values("Costo_CLP", ascending=False)
+    if not resumen.empty:
+        resumen_grafico = resumen.copy()
+        resumen_grafico["Costo_Millones"] = resumen_grafico["Costo_CLP"].apply(limpiar_numero) / 1_000_000
+        fig = px.bar(
+            resumen_grafico,
+            x="Clasificacion_Costo",
+            y="Costo_Millones",
+            text=[pesos(v) for v in resumen_grafico["Costo_CLP"]],
+            template="plotly_white",
+            title="Costo por consolidado",
+            custom_data=["Costo_CLP"],
+        )
+        fig.update_traces(
+            textposition="outside",
+            hovertemplate="Consolidado: %{x}<br>Monto: %{customdata[0]:,.0f} $<br>Millones CLP: %{y:.2f} M<extra></extra>",
+        )
+        fig.update_layout(xaxis_title="Consolidado", yaxis_title="Millones CLP")
+        fig.update_yaxes(tickformat=",.1f", ticksuffix=" M", separatethousands=True)
+        st.plotly_chart(aplicar_formato_grafico(fig, 390), use_container_width=True)
+
+    if gastos_vista.empty:
+        st.info("No existen registros para el filtro seleccionado.")
+        return
+
+    mostrar = preparar_tabla_repuestos(gastos_vista)
+    mostrar_tabla_clara(mostrar, height=450)
+
+
+def pagina_costos(mant_f, gastos_f, combustible_f):
+    st.markdown('<div class="section-head"><div class="panel-title page-section-title">Análisis de Costos</div></div>', unsafe_allow_html=True)
+
+    gastos_sin_combustible = gastos_no_combustible(gastos_f)
+    costo_mantenciones = float(mant_f["Costo_CLP"].sum()) if "Costo_CLP" in mant_f.columns else 0.0
+    costo_gastos = float(gastos_sin_combustible["Costo_CLP"].sum()) if "Costo_CLP" in gastos_sin_combustible.columns else 0.0
+    costo_total = costo_mantenciones + costo_gastos
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        kpi_card("💲", "Total", pesos(costo_total), "Costo acumulado", "#dcfce7")
+    with c2:
+        kpi_card("🛠️", "Mantenciones", pesos(costo_mantenciones), "Preventivas y correctivas", "#dbeafe")
+    with c3:
+        kpi_card("🧾", "Gastos Adicionales", pesos(costo_gastos), "Administrativos y adicionales", "#ede9fe")
+
+    costos_item = construir_consolidado_costos(mant_f, gastos_f)
+
+    st.markdown('<div class="panel-title">Distribución de Costos</div>', unsafe_allow_html=True)
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        st.plotly_chart(crear_donut_costos(costos_item), use_container_width=True)
+    with col2:
+        st.plotly_chart(crear_barra_costos(costos_item), use_container_width=True)
+
+
+def pagina_documentos(documentos_f):
+    st.markdown('<div class="section-head"><div class="panel-title page-section-title">Control Documental</div></div>', unsafe_allow_html=True)
+
+    if documentos_f.empty:
+        st.info("No existen documentos para el filtro aplicado.")
+        return
+
+    mostrar = documentos_f.copy()
+    columnas_eliminar = [
+        "ID_Documento", "ID_Equipo", "Mes_Numero", "Periodo"
+    ]
+    mostrar = mostrar.drop(columns=[c for c in columnas_eliminar if c in mostrar.columns], errors="ignore")
+
+    for col in ["Fecha", "Vencimiento"]:
+        if col in mostrar.columns:
+            mostrar[col] = mostrar[col].apply(fecha_texto)
+
+    mostrar = mostrar.rename(columns={
+        "Tipo_Documento": "Tipo documento",
+        "Ruta_Link": "Ruta / enlace",
+        "Observacion": "Observación",
+    })
+    mostrar_tabla_clara(mostrar, height=520)
+
+
+
+# =========================================================
+# AJUSTE V22 - LOGO MENÚ MÁS PEQUEÑO Y DOCUMENTACIÓN LEGAL
+# =========================================================
+st.markdown(
+    """
+<style>
+.menu-icon-img,
+section[data-testid="stSidebar"] .menu-icon-img {
+    width: 44px !important;
+    height: 44px !important;
+    min-width: 44px !important;
+    max-width: 44px !important;
+    flex: 0 0 44px !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    border: none !important;
+}
+
+.menu-icon-img img,
+section[data-testid="stSidebar"] .menu-icon-img img {
+    width: 44px !important;
+    height: 44px !important;
+    object-fit: contain !important;
+    background: transparent !important;
+    padding: 0 !important;
+    margin: 0 !important;
+}
+</style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+
+# =========================================================
+# CORRECCIÓN STREAMLIT CLOUD V6.0
+# - Busca imágenes relativas al archivo app.py y de forma recursiva.
+# - Evita que Streamlit Cloud muestre tablas oscuras usando tablas HTML claras.
+# =========================================================
+try:
+    BASE_DIR_APP = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    BASE_DIR_APP = os.getcwd()
+
+
+def _rutas_base_imagenes():
+    """Devuelve carpetas candidatas en cwd y en la carpeta real del app.py."""
+    bases = []
+    for raiz in [os.getcwd(), BASE_DIR_APP]:
+        for carpeta in CARPETAS_IMAGENES + [".", "fotos", "Fotos", "FOTOS", "assets", "imagenes", "images", "img", "equipos"]:
+            ruta = os.path.abspath(os.path.join(raiz, carpeta))
+            if ruta not in bases and os.path.isdir(ruta):
+                bases.append(ruta)
+    return bases
+
+
+def listar_imagenes_disponibles():
+    """Listado robusto para Streamlit Cloud.
+    En la nube, el cwd puede no coincidir con la carpeta del script; por eso se busca
+    desde BASE_DIR_APP, recursivamente y sin depender de mayúsculas/minúsculas.
+    """
+    imagenes = []
+    extensiones_validas = {e.lower() for e in EXTENSIONES_IMAGEN}
+    for carpeta in _rutas_base_imagenes():
+        for raiz, _, archivos in os.walk(carpeta):
+            for archivo in archivos:
+                ext = os.path.splitext(archivo)[1].lower()
+                if ext in extensiones_validas:
+                    ruta = os.path.join(raiz, archivo)
+                    if ruta not in imagenes:
+                        imagenes.append(ruta)
+    return imagenes
+
+
+def _resolver_ruta_archivo(ruta):
+    """Resuelve rutas absolutas o relativas al cwd y al archivo app.py."""
+    if not ruta or str(ruta).strip().lower() in ["", "nan", "none"]:
+        return None
+    ruta = str(ruta).strip().strip('"').strip("'")
+    candidatos = [ruta]
+    if not os.path.isabs(ruta):
+        candidatos.extend([
+            os.path.join(os.getcwd(), ruta),
+            os.path.join(BASE_DIR_APP, ruta),
+        ])
+    for candidato in candidatos:
+        if os.path.isfile(candidato):
+            return os.path.abspath(candidato)
+    return None
+
+
+def buscar_imagen_por_nombre(nombre_base):
+    """Busca una imagen por ruta, nombre exacto o nombre normalizado.
+    Corregido para Streamlit Cloud: considera carpeta del script, subcarpetas y
+    diferencias de mayúsculas/minúsculas en GitHub/Linux.
+    """
+    if not nombre_base or str(nombre_base).strip().lower() in ["", "nan", "none"]:
+        return None
+
+    nombre_base = str(nombre_base).strip()
+    ruta_directa = _resolver_ruta_archivo(nombre_base)
+    if ruta_directa:
+        return ruta_directa
+
+    nombre_sin_ext = os.path.splitext(os.path.basename(nombre_base))[0]
+    nombre_norm = normalizar_texto(nombre_sin_ext)
+
+    equivalencias = {
+        "camion_ford_cargo": ["camion_ford", "camion ford", "ford cargo", "camion", "camión"],
+        "camion_ford": ["camion_ford", "camion ford", "ford cargo", "camion", "camión"],
+        "ford_cargo": ["camion_ford", "camion ford", "ford cargo"],
+        "carro_de_arrastre": ["carro_arrastre", "carro arrastre", "carro_de_arrastre"],
+        "carro_arrastre": ["carro_arrastre", "carro arrastre", "carro_de_arrastre"],
+        "minicargador": ["minicargador", "mini cargador", "mini_cargador"],
+        "barredora_tennant_s30": ["barredora", "tennant", "tennant_s30", "barredora tennant"],
+        "barredora": ["barredora", "tennant", "tennant_s30"],
+        "camioneta_mitsubishi": ["camioneta", "mitsubishi", "l200"],
+        "camioneta": ["camioneta", "mitsubishi", "l200"],
+        "alza_hombre": ["alza_hombre", "alza hombre", "alzahombre", "alza"],
+        "grua_horquilla": ["grua_horquilla", "grúa horquilla", "grua horquilla", "grua_orquilla", "orquilla", "horquilla"],
+        "grua_orquilla": ["grua_horquilla", "grúa horquilla", "grua horquilla", "grua_orquilla", "orquilla", "horquilla"],
+        "saivam": ["saivam", "logo_saivam", "logo1", "logo"],
+    }
+
+    nombres_objetivo = [nombre_norm]
+    for eq in equivalencias.get(nombre_norm, []):
+        nombres_objetivo.append(normalizar_texto(eq))
+    nombres_objetivo = list(dict.fromkeys(nombres_objetivo))
+
+    imagenes = listar_imagenes_disponibles()
+
+    # 1) Coincidencia exacta normalizada.
+    for ruta in imagenes:
+        base_norm = normalizar_texto(os.path.splitext(os.path.basename(ruta))[0])
+        if base_norm in nombres_objetivo:
+            return ruta
+
+    # 2) Coincidencia parcial controlada.
+    for ruta in imagenes:
+        base_norm = normalizar_texto(os.path.splitext(os.path.basename(ruta))[0])
+        for objetivo in nombres_objetivo:
+            if objetivo and (objetivo in base_norm or base_norm in objetivo):
+                return ruta
+
+    return None
+
+
+def buscar_imagen_equipo(fila):
+    equipo = str(fila.get("Equipo", "")).strip()
+    id_equipo = str(fila.get("ID_Equipo", "")).strip()
+    tipo_equipo = str(fila.get("Tipo_Equipo", "")).strip()
+    patente_codigo = str(fila.get("Patente_Codigo", "")).strip()
+    marca = str(fila.get("Marca", "")).strip()
+    modelo = str(fila.get("Modelo", "")).strip()
+    imagen_excel = str(fila.get("Imagen", "")).strip()
+
+    candidatos = []
+    id_normal = normalizar_id_equipo(id_equipo)
+    id_sin_guion = id_normal.replace("-", "")
+
+    if id_normal in MAPEO_ID_EQUIPO_IMAGEN:
+        candidatos.append(MAPEO_ID_EQUIPO_IMAGEN[id_normal])
+    if id_sin_guion in MAPEO_ID_EQUIPO_IMAGEN:
+        candidatos.append(MAPEO_ID_EQUIPO_IMAGEN[id_sin_guion])
+
+    if imagen_excel and imagen_excel.lower() not in ["nan", "none", ""]:
+        candidatos.append(imagen_excel)
+
+    texto_equipo = " ".join([equipo, tipo_equipo, patente_codigo, marca, modelo])
+    texto_norm = normalizar_texto(texto_equipo)
+
+    if "grua" in texto_norm or "horquilla" in texto_norm or "orquilla" in texto_norm:
+        candidatos.extend(["grua_horquilla", "grua_orquilla", "horquilla"])
+    if "camioneta" in texto_norm or "mitsubishi" in texto_norm or "l200" in texto_norm:
+        candidatos.extend(["camioneta_mitsubishi", "camioneta", "mitsubishi"])
+    if "camion" in texto_norm and "ford" in texto_norm:
+        candidatos.extend(["camion_ford_cargo", "camion_ford", "ford_cargo"])
+    if "carro" in texto_norm and "arrastre" in texto_norm:
+        candidatos.extend(["carro_de_arrastre", "carro_arrastre"])
+    if "minicargador" in texto_norm or "mini_cargador" in texto_norm:
+        candidatos.extend(["minicargador", "mini_cargador"])
+    if "barredora" in texto_norm or "tennant" in texto_norm:
+        candidatos.extend(["barredora_tennant_s30", "barredora", "tennant_s30"])
+    if "alza" in texto_norm and "hombre" in texto_norm:
+        candidatos.extend(["alza_hombre", "alzahombre"])
+
+    candidatos.extend([id_equipo, equipo, tipo_equipo, patente_codigo, marca, modelo, texto_equipo])
+    candidatos = list(dict.fromkeys([c for c in candidatos if str(c).strip()]))
+
+    for candidato in candidatos:
+        ruta = buscar_imagen_por_nombre(candidato)
+        if ruta and os.path.isfile(ruta):
+            return ruta
+    return None
+
+
+def obtener_ruta_sello_saivam():
+    for candidato in ["saivam", "logo_saivam", "logo1", "logo"]:
+        ruta = buscar_imagen_por_nombre(candidato)
+        if ruta and os.path.isfile(ruta):
+            return ruta
+    return None
+
+
+def es_url_valida(valor):
+    texto = str(valor).strip()
+    return texto.startswith("http://") or texto.startswith("https://")
+
+
+def celda_html_con_enlace(columna, valor):
+    """Permite abrir documentos desde columnas Ruta / enlace o Link.
+    Si la celda trae una URL de Google Drive, Google Docs, SharePoint u otro sitio,
+    se muestra como botón clickeable. Si no es URL, se muestra como texto normal.
+    """
+    valor_txt = "" if pd.isna(valor) else str(valor).strip()
+    columna_norm = normalizar_texto(columna)
+
+    es_columna_enlace = (
+        "ruta" in columna_norm
+        or "link" in columna_norm
+        or "enlace" in columna_norm
+        or "url" in columna_norm
+    )
+
+    if es_columna_enlace and es_url_valida(valor_txt):
+        url = escape_html(valor_txt)
+        return (
+            f'<a class="link-documento" href="{url}" target="_blank" '
+            f'rel="noopener noreferrer">Abrir documento</a>'
+        )
+
+    return escape_html(valor_txt)
+
+
+def tabla_html_clara(df, height=280):
+    """Genera tabla HTML clara, estable en Visual Studio Code y Streamlit Cloud."""
+    if df is None or df.empty:
+        return ""
+
+    columnas = list(df.columns)
+    thead = "".join(f"<th>{escape_html(col)}</th>" for col in columnas)
+    filas = []
+    for _, row in df.iterrows():
+        celdas = []
+        for col in columnas:
+            valor = "" if pd.isna(row[col]) else str(row[col])
+            clase = " monto" if col.lower() in ["monto", "costo", "valor", "total"] or "$" in valor else ""
+            contenido = celda_html_con_enlace(col, row[col])
+            celdas.append(f"<td class='{clase}'>{contenido}</td>")
+        filas.append("<tr>" + "".join(celdas) + "</tr>")
+
+    alto = int(height) if height else 280
+    return f"""
+<div class="tabla-clara-wrap" style="max-height:{alto}px;">
+  <table class="tabla-clara">
+    <thead><tr>{thead}</tr></thead>
+    <tbody>{''.join(filas)}</tbody>
+  </table>
+</div>
+"""
+
+
+def mostrar_tabla_clara(df, height=280):
+    if df is None or df.empty:
+        st.info("No existen registros para el filtro aplicado.")
+        return
+    st.markdown(tabla_html_clara(df, height=height), unsafe_allow_html=True)
+
+
+st.markdown(
+    """
+<style>
+/* Tablas claras fijas para Streamlit Cloud: no dependen del tema oscuro del navegador/app. */
+.tabla-clara-wrap {
+    width: 100% !important;
+    overflow: auto !important;
+    border: 1px solid #cbd5e1 !important;
+    border-radius: 13px !important;
+    background: rgba(255, 255, 255, 0.66) !important;
+    box-shadow: 0 8px 22px rgba(15, 23, 42, 0.05) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+}
+.tabla-clara {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    background: rgba(255, 255, 255, 0.60) !important;
+    color: #0f172a !important;
+    font-size: 13px !important;
+    line-height: 1.35 !important;
+}
+.tabla-clara thead th {
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 2 !important;
+    background: rgba(241, 245, 249, 0.92) !important;
+    color: #475569 !important;
+    font-weight: 850 !important;
+    text-align: left !important;
+    padding: 10px 12px !important;
+    border-bottom: 1px solid #cbd5e1 !important;
+    border-right: 1px solid #d7dee8 !important;
+    white-space: nowrap !important;
+}
+.tabla-clara tbody td {
+    background: rgba(255, 255, 255, 0.38) !important;
+    color: #0f172a !important;
+    padding: 10px 12px !important;
+    border-bottom: 1px solid rgba(203, 213, 225, 0.72) !important;
+    border-right: 1px solid rgba(203, 213, 225, 0.62) !important;
+    vertical-align: top !important;
+}
+.tabla-clara tbody tr:hover td {
+    background: rgba(239, 246, 255, 0.75) !important;
+}
+.tabla-clara a.link-documento {
+    display: inline-block !important;
+    padding: 5px 10px !important;
+    border-radius: 999px !important;
+    background: #2563eb !important;
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    font-weight: 900 !important;
+    text-decoration: none !important;
+    white-space: nowrap !important;
+}
+.tabla-clara a.link-documento:hover {
+    background: #1d4ed8 !important;
+    text-decoration: none !important;
+}
+.tabla-clara td.monto,
+.tabla-clara th:nth-last-child(2) {
+    white-space: nowrap !important;
+    font-variant-numeric: tabular-nums !important;
+}
+/* Refuerzo: si queda algún st.dataframe en otra página, se fuerza contenedor claro. */
+[data-testid="stDataFrame"] {
+    background: rgba(255, 255, 255, 0.72) !important;
+    border: 1px solid #cbd5e1 !important;
+    border-radius: 13px !important;
+}
+</style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+
+# =========================================================
+# CORRECCIÓN FINAL: CAJA INFERIOR DEL MENÚ COMPLETA
+# =========================================================
+st.markdown(
+    """
+<style>
+/* Evita que Streamlit Cloud corte la tarjeta inferior del menú. */
+section[data-testid="stSidebar"] {
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+}
+
+section[data-testid="stSidebar"] > div,
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+    height: auto !important;
+    min-height: 100vh !important;
+    padding: 10px 12px 28px 12px !important;
+    box-sizing: border-box !important;
+    overflow-y: visible !important;
+    overflow-x: hidden !important;
+}
+
+section[data-testid="stSidebar"] .menu-footer-box {
+    width: 262px !important;
+    min-width: 262px !important;
+    max-width: 262px !important;
+    height: auto !important;
+    min-height: 118px !important;
+    display: block !important;
+    overflow: visible !important;
+    box-sizing: border-box !important;
+    padding: 12px 12px 14px 12px !important;
+    margin-top: 10px !important;
+    margin-bottom: 22px !important;
+    border-radius: 15px !important;
+    background: rgba(2, 6, 23, 0.98) !important;
+    border: 1px solid rgba(147, 197, 253, 0.38) !important;
+}
+
+section[data-testid="stSidebar"] .menu-info,
+section[data-testid="stSidebar"] .menu-info * {
+    display: inline !important;
+    height: auto !important;
+    min-height: auto !important;
+    overflow: visible !important;
+    white-space: normal !important;
+    word-break: normal !important;
+    overflow-wrap: break-word !important;
+    line-height: 1.55 !important;
+    font-size: 12.2px !important;
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    opacity: 1 !important;
+}
+
+section[data-testid="stSidebar"] .menu-info {
+    display: block !important;
+    width: 100% !important;
+}
+
+section[data-testid="stSidebar"] .menu-info b {
+    color: #93c5fd !important;
+    -webkit-text-fill-color: #93c5fd !important;
+    font-weight: 950 !important;
+}
+</style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+# =========================================================
+# AJUSTE FINAL SOLICITADO
+# 1) Menú principal: Dashboard Ejecutivo.
+# 2) Documentación Legal sin columnas Año y Mes.
+# 3) Montos CLP con signo $ siempre al inicio.
+# =========================================================
+
+
+def normalizar_monto_clp_texto(valor):
+    """Devuelve montos en formato CLP con $ a la derecha.
+    Corrige valores escritos como '180.000 $', '$1.850.000', '3430000', etc.
+    """
+    if pd.isna(valor):
+        return ""
+
+    texto = str(valor).strip()
+    if texto == "":
+        return ""
+
+    # Si no parece monto, no se interviene.
+    tiene_signo = "$" in texto
+    tiene_numero = bool(re.search(r"\d", texto))
+    if not tiene_numero:
+        return texto
+
+    # Se aplica solo a columnas de monto/costo o a textos que ya tienen signo $.
+    numero_limpio = limpiar_numero(texto)
+    if tiene_signo or re.fullmatch(r"[0-9. ,\-]+", texto):
+        return pesos(numero_limpio)
+
+    return texto
+
+
+def celda_html_con_enlace(columna, valor):
+    """Renderiza celdas con soporte de link y formato CLP corregido."""
+    valor_txt = "" if pd.isna(valor) else str(valor).strip()
+    columna_norm = normalizar_texto(columna)
+
+    es_columna_enlace = (
+        "ruta" in columna_norm
+        or "link" in columna_norm
+        or "enlace" in columna_norm
+        or "url" in columna_norm
+    )
+
+    if es_columna_enlace and es_url_valida(valor_txt):
+        url = escape_html(valor_txt)
+        return (
+            f'<a class="link-documento" href="{url}" target="_blank" '
+            f'rel="noopener noreferrer">Abrir documento</a>'
+        )
+
+    es_columna_monto = columna_norm in [
+        "monto", "costo", "valor", "total", "costo_clp", "costo_total",
+        "valor_unitario", "monto_total"
+    ] or any(palabra in columna_norm for palabra in ["monto", "costo", "valor", "total"])
+
+    if es_columna_monto or "$" in valor_txt:
+        valor_txt = normalizar_monto_clp_texto(valor_txt)
+
+    return escape_html(valor_txt)
+
+
+def pagina_documentos(documentos_f):
+    st.markdown('<div class="section-head"><div class="panel-title page-section-title">Control Documental</div></div>', unsafe_allow_html=True)
+
+    if documentos_f.empty:
+        st.info("No existen documentos para el filtro aplicado.")
+        return
+
+    mostrar = documentos_f.copy()
+
+    # En Documentación Legal no se muestran las columnas Año y Mes.
+    columnas_eliminar = [
+        "ID_Documento",
+        "ID_Equipo",
+        "Año",
+        "Ano",
+        "Mes",
+        "Mes_Numero",
+        "Periodo",
+    ]
+    mostrar = mostrar.drop(columns=[c for c in columnas_eliminar if c in mostrar.columns], errors="ignore")
+
+    for col in ["Fecha", "Vencimiento"]:
+        if col in mostrar.columns:
+            mostrar[col] = mostrar[col].apply(fecha_texto)
+
+    mostrar = mostrar.rename(
+        columns={
             "Tipo_Documento": "Tipo documento",
-            "Nombre_Documento": "Nombre documento",
-            "Nombre_Certificacion": "Nombre certificación",
-            "Entidad_Emisora": "Entidad emisora",
-            "Numero_Certificado": "N.º certificado",
-            "Dias_Para_Vencer": "Días para vencer",
             "Ruta_Link": "Ruta / enlace",
             "Observacion": "Observación",
             "Descripcion": "Descripción",
-            "Detalle": "Descripción",
-            "Categoria": "Categoría",
-            "Subcategoria": "Subcategoría",
-            "Protocolo": "Protocolo MINSAL",
-            "Titular_Activo": "Titular / activo",
         }
     )
 
-    cantidad_columnas = max(1, len(mostrar.columns))
+    mostrar_tabla_clara(mostrar, height=520)
 
-    # El tamaño de letra disminuye gradualmente cuando hay más columnas.
-    if cantidad_columnas <= 7:
-        tamano_letra = "11px"
-        padding_celda = "5px 6px"
-    elif cantidad_columnas <= 9:
-        tamano_letra = "10px"
-        padding_celda = "4px 5px"
-    elif cantidad_columnas <= 11:
-        tamano_letra = "9px"
-        padding_celda = "3px 4px"
+
+
+# =========================================================
+# AJUSTE FINAL V5.2
+# - Dashboard Ejecutivo aprovecha mejor el espacio vertical.
+# - Histórico de Mantenciones queda más alto para evitar espacio vacío.
+# - Distribución de Costos más compacta.
+# - Todos los montos CLP se fuerzan con $ a la derecha, incluso si vienen desde Google Sheets como "65.000 $".
+# =========================================================
+
+
+def pesos(valor):
+    """Formato CLP definitivo: $ siempre a la derecha del monto.
+    Acepta números y textos como '65.000 $', '$65.000', '65000'.
+    """
+    try:
+        if pd.isna(valor):
+            return "0 $"
+    except Exception:
+        pass
+
+    if isinstance(valor, str):
+        numero_valor = limpiar_numero(valor)
     else:
-        tamano_letra = "8.2px"
-        padding_celda = "3px 3px"
+        try:
+            numero_valor = float(valor)
+        except Exception:
+            numero_valor = limpiar_numero(valor)
 
-    # Formato especial para tablas con muchas columnas, como el
-    # cumplimiento anual por observador.
-    if modo_ultracompacto:
-        tamano_letra = "8.6px"
-        padding_celda = "2px 2px"
+    try:
+        return "$ " + f"{int(round(float(numero_valor))):,}".replace(",", ".")
+    except Exception:
+        return "0 $"
 
-    columnas_cortas = {
-        "fecha",
-        "vencimiento",
-        "fecha_compromiso",
-        "fecha_programada",
-        "fecha_realizacion",
-        "estado",
-        "area",
-        "mes",
-        "meta",
-        "resultado",
-        "cumplimiento",
-        "asistentes",
-        "expuestos",
-        "permiso",
-        "version",
-        "gravedad",
-        "periodo",
-        "origen",
-        "tipo",
-    }
 
-    columnas_medias = {
-        "trabajador",
-        "supervisor",
-        "responsable",
-        "relator",
-        "cargo",
-        "tipo_evento",
-        "tipo_observacion",
-        "tipo_inspeccion",
-        "tipo_actividad",
-        "eje_de_trabajo",
-        "tipo_reunion",
-        "tipo_trabajo",
-        "tipo_documento",
-        "protocolo_minsal",
-        "etapa",
-        "registro",
-        "categoria",
-        "subcategoria",
-        "ruta_enlace",
-        "evidencia",
-    }
+def pesos_html(valor):
+    return pesos(valor)
 
-    columnas_largas = {
-        "actividad",
-        "tema",
-        "descripcion",
-        "conducta_segura",
-        "conducta_de_riesgo",
-        "medida_correctiva",
-        "accion_inmediata",
-        "hallazgos",
-        "hallazgo",
-        "accion_correctiva",
-        "observacion",
-        "acuerdo",
-        "motivo",
-        "nombre_documento",
-        "nombre_certificacion",
-    }
 
-    pesos = []
+def normalizar_monto_clp_texto(valor):
+    """Corrige cualquier monto para que quede como '10.000 $'."""
+    if pd.isna(valor):
+        return ""
 
-    meses_columnas = {
-        "enero", "febrero", "marzo", "abril", "mayo", "junio",
-        "julio", "agosto", "septiembre", "octubre",
-        "noviembre", "diciembre",
-    }
+    texto = str(valor).strip()
+    if texto == "":
+        return ""
 
-    for columna in mostrar.columns:
-        clave = normalizar_texto(columna)
+    tiene_numero = bool(re.search(r"\d", texto))
+    if not tiene_numero:
+        return texto
 
-        if clave in meses_columnas:
-            peso = 1.08
-        elif clave in columnas_largas:
-            peso = 2.05
-        elif clave in columnas_medias:
-            peso = 1.25
-        elif clave in columnas_cortas:
-            peso = 0.82
-        else:
-            peso = 1.0
+    # Se corrige cuando ya trae $, o cuando la columna lo tratará como monto.
+    return pesos(texto)
 
-        # Pequeño ajuste según la extensión real del contenido.
-        valores = mostrar[columna].dropna().astype(str).head(80)
-        longitud_media = valores.str.len().mean() if not valores.empty else 0
 
-        if longitud_media >= 45:
-            peso += 0.45
-        elif longitud_media >= 25:
-            peso += 0.25
-        elif longitud_media <= 8:
-            peso -= 0.08
+def kpi_card(icono, titulo, valor, subtitulo, color_fondo):
+    """Tarjeta KPI con corrección estricta de montos CLP."""
+    valor_txt = "" if pd.isna(valor) else str(valor).strip()
+    if "$" in valor_txt or "＄" in valor_txt:
+        valor_txt = pesos(valor_txt.replace("＄", "$"))
 
-        if modo_ultracompacto:
-            # Reduce espacios innecesarios en la tabla anual.
-            if clave == "observador":
-                peso = 1.20
-            elif clave == "tipo_observacion":
-                peso = 1.25
-            elif clave in {
-                "ene", "feb", "mar", "abr", "may", "jun",
-                "jul", "ago", "sep", "oct", "nov", "dic",
-            }:
-                peso = 0.68
-            elif clave in {
-                "real_ano", "teorica_ano", "avance",
-                "real_a_la_fecha", "meta_a_la_fecha",
-                "a_la_fecha",
-            }:
-                peso = 0.92
-
-        pesos.append(max(0.54, peso))
-
-    suma_pesos = sum(pesos)
-    anchos = [(peso / suma_pesos) * 100 for peso in pesos]
-
-    colgroup_html = "<colgroup>" + "".join(
-        f'<col style="width:{ancho:.3f}%">'
-        for ancho in anchos
-    ) + "</colgroup>"
-
-    encabezados_html = "".join(
-        f"<th>{escape_html(columna)}</th>"
-        for columna in mostrar.columns
+    st.markdown(
+        f"""
+<div class="kpi-card">
+    <div class="kpi-icon" style="background:{color_fondo};">{icono}</div>
+    <div class="kpi-title">{escape_html(titulo)}</div>
+    <div class="kpi-value">{escape_html(valor_txt)}</div>
+    <div class="kpi-sub">{escape_html(subtitulo)}</div>
+</div>
+        """,
+        unsafe_allow_html=True,
     )
 
-    columnas_centradas = {
-        "fecha",
-        "vencimiento",
-        "fecha_compromiso",
-        "fecha_programada",
-        "fecha_realizacion",
-        "estado",
-        "meta",
-        "resultado",
-        "cumplimiento",
-        "asistentes",
-        "expuestos",
-        "permiso",
-        "version",
-        "gravedad",
-        "dias_para_vencer",
-    }
 
-    # Columnas que deben comenzar desde la parte superior de cada fila.
-    # Se normalizan para aceptar nombres internos o visibles con tildes.
-    columnas_alineadas_arriba = {
-        normalizar_texto(columna)
-        for columna in (alinear_arriba_columnas or [])
-    }
+def celda_html_con_enlace(columna, valor):
+    """Renderiza links y fuerza CLP con $ a la derecha en columnas monetarias."""
+    valor_txt = "" if pd.isna(valor) else str(valor).strip()
+    columna_norm = normalizar_texto(columna)
 
-    def valor_texto(valor):
+    es_columna_enlace = (
+        "ruta" in columna_norm
+        or "link" in columna_norm
+        or "enlace" in columna_norm
+        or "url" in columna_norm
+    )
+
+    if es_columna_enlace and es_url_valida(valor_txt):
+        url = escape_html(valor_txt)
+        return (
+            f'<a class="link-documento" href="{url}" target="_blank" '
+            f'rel="noopener noreferrer">Abrir documento</a>'
+        )
+
+    es_columna_monto = any(
+        palabra in columna_norm
+        for palabra in ["monto", "costo", "valor", "total", "clp", "unitario"]
+    )
+
+    if es_columna_monto or "$" in valor_txt or "＄" in valor_txt:
+        valor_txt = normalizar_monto_clp_texto(valor_txt.replace("＄", "$"))
+
+    return escape_html(valor_txt)
+
+
+def crear_donut_costos(costos_item):
+    """Dona de costos compacta para aprovechar mejor el Dashboard Ejecutivo."""
+    fig = go.Figure()
+
+    if costos_item is None or costos_item.empty:
+        fig.update_layout(
+            height=310,
+            paper_bgcolor="rgba(255,255,255,0.82)",
+            plot_bgcolor="rgba(255,255,255,0.82)",
+            annotations=[dict(text="Sin costos", x=0.5, y=0.5, showarrow=False, font_size=16, font_color="#0f172a")],
+            margin=dict(l=6, r=6, t=4, b=6),
+        )
+        return fig
+
+    total = float(costos_item["Costo"].sum())
+
+    fig.add_trace(
+        go.Pie(
+            labels=costos_item["Item"],
+            values=costos_item["Costo"],
+            hole=0.62,
+            sort=False,
+            direction="clockwise",
+            textinfo="percent",
+            texttemplate="%{percent:.1%}",
+            textposition="auto",
+            insidetextorientation="auto",
+            textfont=dict(color="white", size=14, family="Arial Black"),
+            outsidetextfont=dict(color="#0f172a", size=13, family="Arial Black"),
+            hovertemplate="<b>%{label}</b><br>Monto: %{customdata}<br>Participación: %{percent}<extra></extra>",
+            customdata=[pesos(v) for v in costos_item["Costo"]],
+            domain=dict(x=[0.07, 0.93], y=[0.22, 0.96]),
+            showlegend=True,
+        )
+    )
+
+    fig.update_layout(
+        height=285,
+        paper_bgcolor="rgba(255,255,255,0.82)",
+        plot_bgcolor="rgba(255,255,255,0.82)",
+        font=dict(color="#0f172a", size=12),
+        margin=dict(l=6, r=6, t=0, b=44),
+        annotations=[
+            dict(
+                text="Total<br><b>" + pesos(total) + "</b>",
+                x=0.50,
+                y=0.60,
+                xref="paper",
+                yref="paper",
+                font_size=14,
+                font_color="#0f172a",
+                showarrow=False,
+                align="center",
+            )
+        ],
+        legend=dict(
+            title=dict(text="Tipo de costo", font=dict(size=12, color="#0f172a")),
+            orientation="h",
+            x=0.50,
+            y=-0.03,
+            xanchor="center",
+            yanchor="top",
+            font=dict(size=12, color="#0f172a", family="Arial"),
+            bgcolor="rgba(255,255,255,0.82)",
+            bordercolor="rgba(15,23,42,0.16)",
+            borderwidth=1,
+            itemclick=False,
+            itemdoubleclick=False,
+        ),
+        uniformtext_minsize=9,
+        uniformtext_mode="show",
+    )
+    return fig
+
+
+st.markdown(
+    """
+<style>
+/* V5.2: mejor uso de espacios del Dashboard Ejecutivo */
+.panel-title {
+    margin-top: 8px !important;
+    margin-bottom: 5px !important;
+}
+[data-testid="stPlotlyChart"] {
+    margin-bottom: 0px !important;
+}
+.tabla-clara-wrap {
+    margin-bottom: 4px !important;
+}
+.proximas-box {
+    margin-top: 0px !important;
+}
+/* Montos: alineados a la derecha y sin separación visual extra */
+.tabla-clara td.monto,
+.tabla-clara th.monto {
+    text-align: left !important;
+    white-space: nowrap !important;
+}
+.kpi-value {
+    white-space: nowrap !important;
+}
+</style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+
+# =========================================================
+# OVERRIDE FINAL V5.3: FORMATO CLP DEFINITIVO
+# =========================================================
+def pesos(valor):
+    """Formato CLP final: signo $ a la derecha del monto."""
+    try:
+        if pd.isna(valor):
+            return "0 $"
+    except Exception:
+        pass
+
+    try:
+        numero_valor = limpiar_numero(valor)
+        return f"{int(round(float(numero_valor))):,}".replace(",", ".") + " $"
+    except Exception:
+        return "0 $"
+
+
+def pesos_html(valor):
+    return pesos(valor)
+
+
+def normalizar_monto_clp_texto(valor):
+    """Normaliza montos como '10.000 $', incluso si vienen como '$10.000' o '10.000$'."""
+    try:
         if pd.isna(valor):
             return ""
+    except Exception:
+        pass
 
-        if isinstance(valor, float) and valor.is_integer():
-            return str(int(valor))
+    texto = str(valor).strip()
+    if texto == "":
+        return ""
 
-        return str(valor)
+    if not re.search(r"\d", texto):
+        return texto
 
-    def celda_html(valor, columna):
-        texto = valor_texto(valor).strip()
-        clave = normalizar_texto(columna)
+    return pesos(texto.replace("＄", "$"))
 
-        clases = []
 
-        if centrar_todo or clave in columnas_centradas:
-            clases.append("tabla-celda-centrada")
+def kpi_card(icono, titulo, valor, subtitulo, color_fondo):
+    """Tarjeta KPI con montos CLP siempre con $ a la derecha."""
+    valor_txt = "" if pd.isna(valor) else str(valor).strip()
+    if "$" in valor_txt or "＄" in valor_txt:
+        valor_txt = pesos(valor_txt.replace("＄", "$"))
 
-        if clave in columnas_alineadas_arriba:
-            clases.append("tabla-celda-arriba")
+    st.markdown(
+        f"""
+<div class="kpi-card">
+    <div class="kpi-icon" style="background:{color_fondo};">{icono}</div>
+    <div class="kpi-title">{escape_html(titulo)}</div>
+    <div class="kpi-value">{escape_html(valor_txt)}</div>
+    <div class="kpi-sub">{escape_html(subtitulo)}</div>
+</div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-        clase = " ".join(clases)
 
-        es_columna_enlace = clave in {
-            "ruta_link",
-            "ruta_enlace",
-            "respaldo",
-            "evidencia",
-            "link",
-            "enlace",
-        }
+def celda_html_con_enlace(columna, valor):
+    """Renderiza links y fuerza CLP con $ a la derecha en columnas monetarias."""
+    valor_txt = "" if pd.isna(valor) else str(valor).strip()
+    columna_norm = normalizar_texto(columna)
 
-        es_url = texto.lower().startswith(("http://", "https://"))
+    es_columna_enlace = (
+        "ruta" in columna_norm
+        or "link" in columna_norm
+        or "enlace" in columna_norm
+        or "url" in columna_norm
+    )
 
-        if es_url:
-            etiqueta = "📄 Abrir respaldo" if es_columna_enlace else "🔗 Abrir"
-
-            contenido = (
-                f'<a class="tabla-link-boton" '
-                f'href="{escape_html(texto)}" '
-                f'target="_blank" '
-                f'rel="noopener noreferrer">'
-                f'{escape_html(etiqueta)}'
-                f'</a>'
-            )
-        elif es_columna_enlace and texto:
-            # Si todavía existe texto como "link" o "enlace", se muestra como
-            # texto normal porque no contiene una URL válida.
-            contenido = escape_html(texto)
-        else:
-            contenido = escape_html(texto)
-
-        return f'<td class="{clase}">{contenido}</td>'
-
-    filas_html = []
-
-    for _, fila in mostrar.iterrows():
-        celdas = "".join(
-            celda_html(fila[columna], columna)
-            for columna in mostrar.columns
+    if es_columna_enlace and es_url_valida(valor_txt):
+        url = escape_html(valor_txt)
+        return (
+            f'<a class="link-documento" href="{url}" target="_blank" '
+            f'rel="noopener noreferrer">Abrir documento</a>'
         )
-        filas_html.append(f"<tr>{celdas}</tr>")
+
+    es_columna_monto = any(
+        palabra in columna_norm
+        for palabra in ["monto", "costo", "valor", "total", "clp", "unitario"]
+    )
+
+    if es_columna_monto or "$" in valor_txt or "＄" in valor_txt:
+        valor_txt = normalizar_monto_clp_texto(valor_txt.replace("＄", "$"))
+
+    return escape_html(valor_txt)
+
+# =========================================================
+# AJUSTE FINAL V5.3
+# - Montos CLP con signo $ a la derecha del monto.
+# - Gráficos de costos con eje Y en millones CLP.
+# - Mejor aprovechamiento de espacios verticales del dashboard.
+# =========================================================
+st.markdown(
+    """
+<style>
+/* Compacta espacios entre tablas y bloques del dashboard */
+.panel-title {
+    margin-top: 6px !important;
+    margin-bottom: 4px !important;
+}
+[data-testid="stVerticalBlock"] {
+    gap: 0.26rem !important;
+}
+[data-testid="stHorizontalBlock"] {
+    gap: 0.65rem !important;
+}
+.tabla-clara-wrap {
+    margin-bottom: 2px !important;
+}
+[data-testid="stPlotlyChart"] {
+    margin-top: 0px !important;
+    margin-bottom: 0px !important;
+}
+.proximas-box, .proxima-row, .next-item {
+    margin-top: 0px !important;
+    margin-bottom: 1px !important;
+}
+
+/* Montos CLP: signo a la derecha y lectura uniforme */
+.tabla-clara td.monto,
+.tabla-clara th.monto {
+    text-align: right !important;
+    white-space: nowrap !important;
+}
+.kpi-value, .plotly .textpoint {
+    white-space: nowrap !important;
+}
+</style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+
+# =========================================================
+# OVERRIDE FINAL V5.4: TABLAS, GASTOS ADICIONALES Y GRÁFICOS
+# =========================================================
+
+def preparar_tabla_mantenciones(mantenciones):
+    """Tabla de mantenciones sin columnas Mes/Año, compatible con Google Sheets sin esas columnas."""
+    mostrar = mantenciones.copy() if isinstance(mantenciones, pd.DataFrame) else pd.DataFrame()
+
+    if mostrar.empty:
+        return mostrar
+
+    if "Tipo_Mantencion" in mostrar.columns:
+        mostrar["Mantencion"] = mostrar["Tipo_Mantencion"].apply(normalizar_tipo_mantencion)
+    elif "Mantencion" in mostrar.columns:
+        mostrar["Mantencion"] = mostrar["Mantencion"].apply(normalizar_tipo_mantencion)
+    else:
+        mostrar["Mantencion"] = "Sin tipo"
+
+    if "Fecha" in mostrar.columns:
+        mostrar["Fecha"] = mostrar["Fecha"].apply(fecha_texto)
+
+    if "Costo_CLP" in mostrar.columns:
+        mostrar["Costo_CLP"] = mostrar["Costo_CLP"].apply(pesos)
+
+    columnas_orden = [
+        "Fecha",
+        "Equipo",
+        "Mantencion",
+        "Categoria",
+        "Proveedor",
+        "Descripcion",
+        "Costo_CLP",
+        "Estado_Mantencion",
+        "Documento_Respaldo",
+        "Observacion",
+    ]
+
+    columnas_orden = [c for c in columnas_orden if c in mostrar.columns]
+    mostrar = mostrar[columnas_orden].copy()
+
+    mostrar = mostrar.rename(
+        columns={
+            "Mantencion": "Mantención",
+            "Categoria": "Categoría",
+            "Descripcion": "Descripción",
+            "Costo_CLP": "Costo",
+            "Estado_Mantencion": "Estado",
+            "Documento_Respaldo": "Documento respaldo",
+            "Observacion": "Observación",
+        }
+    )
+    return mostrar
+
+
+def preparar_tabla_repuestos(gastos):
+    """Tabla de gastos adicionales sin columnas Mes/Año/Periodo."""
+    mostrar = gastos.copy() if isinstance(gastos, pd.DataFrame) else pd.DataFrame()
+
+    if mostrar.empty:
+        return mostrar
+
+    if "Equipo" in mostrar.columns:
+        equipo_txt = mostrar["Equipo"].fillna("").astype(str).str.strip().str.lower()
+    else:
+        equipo_txt = pd.Series([""] * len(mostrar), index=mostrar.index)
+
+    if "Descripcion" in mostrar.columns:
+        desc_txt = mostrar["Descripcion"].fillna("").astype(str).str.strip().str.lower()
+    else:
+        desc_txt = pd.Series([""] * len(mostrar), index=mostrar.index)
+
+    costo_num = mostrar["Costo_CLP"].apply(limpiar_numero) if "Costo_CLP" in mostrar.columns else pd.Series([0] * len(mostrar), index=mostrar.index)
+    mostrar = mostrar[(~equipo_txt.isin(["", "none", "nan"])) | (~desc_txt.isin(["", "none", "nan"])) | (costo_num > 0)].copy()
+
+    if mostrar.empty:
+        return mostrar
+
+    mostrar["Clasificacion_Costo"] = mostrar.apply(
+        lambda x: categoria_costo_gasto(x.get("Tipo_Gasto", ""), x.get("Descripcion", ""), x.get("Mantencion", "")),
+        axis=1,
+    )
+
+    if "Fecha" in mostrar.columns:
+        mostrar["Fecha"] = mostrar["Fecha"].apply(fecha_texto)
+    if "Costo_CLP" in mostrar.columns:
+        mostrar["Costo_CLP"] = mostrar["Costo_CLP"].apply(pesos)
+
+    columnas_orden = [
+        "Fecha",
+        "Equipo",
+        "Mantencion",
+        "Tipo_Gasto",
+        "Clasificacion_Costo",
+        "Descripcion",
+        "Proveedor",
+        "Costo_CLP",
+        "Documento_Respaldo",
+        "Observacion",
+    ]
+    columnas_orden = [c for c in columnas_orden if c in mostrar.columns]
+    mostrar = mostrar[columnas_orden].copy()
+    mostrar = mostrar.rename(columns={
+        "Mantencion": "Mantención",
+        "Tipo_Gasto": "Tipo gasto",
+        "Clasificacion_Costo": "Consolidado",
+        "Descripcion": "Descripción",
+        "Costo_CLP": "Costo",
+        "Documento_Respaldo": "Documento respaldo",
+        "Observacion": "Observación",
+    })
+    return mostrar
+
+
+def preparar_tabla_proximas(proximas):
+    """Tabla compacta de próximas mantenciones y alertas.
+    Elimina Frecuencia, Categoría, Mantención y Costo.
+    Formatea Próxima mantención sin decimales ni '.0'.
+    """
+    mostrar = proximas.copy() if isinstance(proximas, pd.DataFrame) else pd.DataFrame()
+
+    if mostrar.empty:
+        return mostrar
+
+    mostrar = enriquecer_estado_proximas(mostrar)
+
+    if "Proxima_Mantencion" in mostrar.columns:
+        mostrar["Proxima_Mantencion"] = mostrar.apply(
+            lambda x: formatear_valor_control(x.get("Proxima_Mantencion", 0), x.get("Unidad_Control", "")),
+            axis=1,
+        )
+
+    if "Km_Horometro_Actual" in mostrar.columns:
+        mostrar["Km_Horometro_Actual"] = mostrar.apply(
+            lambda x: formatear_valor_control(x.get("Km_Horometro_Actual", 0), x.get("Unidad_Control", "")),
+            axis=1,
+        )
+
+    if "Saldo_Restante" in mostrar.columns:
+        mostrar["Saldo_Restante"] = mostrar.apply(
+            lambda x: formatear_saldo_control(x.get("Saldo_Restante", 0), x.get("Unidad_Control", "")),
+            axis=1,
+        )
+
+    columnas_orden = [
+        "Equipo",
+        "Marca",
+        "Modelo",
+        "Patente_Codigo",
+        "Km_Horometro_Actual",
+        "Unidad_Control",
+        "Descripcion",
+        "Proxima_Mantencion",
+        "Estado_Control",
+        "Saldo_Restante",
+        "Texto_Estado",
+        "Observacion",
+    ]
+    columnas_orden = [c for c in columnas_orden if c in mostrar.columns]
+    mostrar = mostrar[columnas_orden].copy()
+
+    mostrar = mostrar.rename(
+        columns={
+            "Patente_Codigo": "Patente / Código",
+            "Km_Horometro_Actual": "Lectura actual",
+            "Unidad_Control": "Unidad",
+            "Descripcion": "Descripción",
+            "Proxima_Mantencion": "Próxima mantención",
+            "Estado_Control": "Estado",
+            "Saldo_Restante": "Saldo restante",
+            "Texto_Estado": "Análisis",
+            "Observacion": "Observación",
+        }
+    )
+    return mostrar
+
+
+def crear_barra_costos(costos_item):
+    """Barra de costos con colores distintos y eje Y en millones CLP."""
+    if costos_item is None or costos_item.empty:
+        return aplicar_formato_grafico(go.Figure(), 360)
+
+    datos = costos_item.copy()
+    datos["Costo_Millones"] = datos["Costo"].apply(limpiar_numero) / 1_000_000
+
+    colores_costo = ["#2563eb", "#16a34a", "#f97316", "#dc2626", "#9333ea", "#0ea5e9"]
+
+    fig = px.bar(
+        datos,
+        x="Item",
+        y="Costo_Millones",
+        color="Item",
+        color_discrete_sequence=colores_costo,
+        text=[pesos(v) for v in datos["Costo"]],
+        template="plotly_white",
+        title="Costo por categoría",
+        custom_data=["Costo"],
+    )
+    fig.update_traces(
+        textposition="outside",
+        hovertemplate="Categoría: %{x}<br>Monto: %{customdata[0]:,.0f} $<br>Millones CLP: %{y:.2f} M<extra></extra>",
+        marker_line_width=0,
+    )
+    fig.update_layout(
+        xaxis_title="Categoría",
+        yaxis_title="Millones CLP",
+        showlegend=False,
+        uniformtext_minsize=10,
+        uniformtext_mode="hide",
+        margin=dict(l=10, r=10, t=55, b=10),
+    )
+    fig.update_yaxes(tickformat=".1f", ticksuffix=" M")
+    return aplicar_formato_grafico(fig, 380)
+
+
+def pagina_repuestos(gastos_f):
+    st.markdown('<div class="section-head"><div class="panel-title page-section-title">Gastos Adicionales</div><div class="panel-subtitle">Repuestos, administrativos y gastos asociados a mantenciones preventivas/correctivas.</div></div>', unsafe_allow_html=True)
+    # st.caption("Repuestos, administrativos y gastos adicionales asociados a mantenciones preventivas/correctivas.")
+
+    gastos_sin_combustible = gastos_no_combustible(gastos_f)
+    if gastos_sin_combustible.empty:
+        st.info("No existen gastos adicionales para el filtro aplicado.")
+        return
+
+    gastos_sin_combustible = gastos_sin_combustible.copy()
+    gastos_sin_combustible["Clasificacion_Costo"] = gastos_sin_combustible.apply(
+        lambda x: categoria_costo_gasto(x.get("Tipo_Gasto", ""), x.get("Descripcion", ""), x.get("Mantencion", "")),
+        axis=1,
+    )
+
+    tipos = sorted([t for t in gastos_sin_combustible["Clasificacion_Costo"].dropna().astype(str).unique() if t.strip() != ""])
+    filtro_tipo_gasto = st.selectbox("Filtrar por consolidado", ["Todos"] + tipos)
+
+    gastos_vista = gastos_sin_combustible.copy()
+    if filtro_tipo_gasto != "Todos":
+        gastos_vista = gastos_vista[gastos_vista["Clasificacion_Costo"] == filtro_tipo_gasto].copy()
+
+    resumen = gastos_vista.groupby("Clasificacion_Costo", as_index=False)["Costo_CLP"].sum().sort_values("Costo_CLP", ascending=False)
+    if not resumen.empty:
+        resumen_grafico = resumen.copy()
+        resumen_grafico["Costo_Millones"] = resumen_grafico["Costo_CLP"].apply(limpiar_numero) / 1_000_000
+        colores_gastos = ["#2563eb", "#16a34a", "#f97316", "#dc2626", "#9333ea", "#0ea5e9"]
+        fig = px.bar(
+            resumen_grafico,
+            x="Clasificacion_Costo",
+            y="Costo_Millones",
+            color="Clasificacion_Costo",
+            color_discrete_sequence=colores_gastos,
+            text=[pesos(v) for v in resumen_grafico["Costo_CLP"]],
+            template="plotly_white",
+            title="Costo por consolidado",
+            custom_data=["Costo_CLP"],
+        )
+        fig.update_traces(
+            textposition="outside",
+            hovertemplate="Consolidado: %{x}<br>Monto: %{customdata[0]:,.0f} $<br>Millones CLP: %{y:.2f} M<extra></extra>",
+            marker_line_width=0,
+        )
+        fig.update_layout(
+            xaxis_title="Consolidado",
+            yaxis_title="Millones CLP",
+            showlegend=False,
+        )
+        fig.update_yaxes(tickformat=".1f", ticksuffix=" M")
+        st.plotly_chart(aplicar_formato_grafico(fig, 390), use_container_width=True)
+
+    if gastos_vista.empty:
+        st.info("No existen registros para el filtro seleccionado.")
+        return
+
+    mostrar = preparar_tabla_repuestos(gastos_vista)
+    mostrar_tabla_clara(mostrar, height=450)
+
+
+# =========================================================
+# AJUSTE FINAL V5.5
+# - % visibles en gráfico de dona de costos.
+# - Próximas Mantenciones más ancho en Dashboard Ejecutivo.
+# - Se elimina la palabra "indefinido" del gráfico Evolución de Costos.
+# =========================================================
+st.markdown(
+    """
+<style>
+.proximas-box {
+    width: 100% !important;
+    max-width: none !important;
+}
+.proximas-box .panel-title {
+    font-size: 18px !important;
+    margin-bottom: 8px !important;
+}
+.proximas-box .next-item {
+    width: 100% !important;
+    max-width: none !important;
+    min-height: 39px !important;
+    grid-template-columns: minmax(0, 1fr) auto !important;
+    column-gap: 10px !important;
+}
+.proximas-box .next-title {
+    font-size: 12px !important;
+    line-height: 1.12 !important;
+}
+.proximas-box .next-sub {
+    font-size: 10.3px !important;
+    line-height: 1.10 !important;
+}
+.proximas-box .badge-days {
+    min-width: 62px !important;
+    font-size: 9.5px !important;
+    padding: 5px 7px !important;
+}
+</style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+# =========================================================
+# AJUSTE FINAL V5.6
+# - Sube el título y logo de la página principal para aprovechar el espacio superior.
+# - Compacta la tabla de Gastos Adicionales del Dashboard para evitar barra horizontal.
+# - Botón del menú queda solo como "Actualizar".
+# =========================================================
+
+
+def pagina_dashboard(equipos_f, mant_f, gastos_f, combustible_f, proximas_originales, filtro_equipo):
+    """Dashboard Ejecutivo optimizado para ver más contenido en 100% de zoom."""
+    gastos_sin_combustible = gastos_no_combustible(gastos_f)
+
+    costo_mantenciones = float(mant_f["Costo_CLP"].sum()) if "Costo_CLP" in mant_f.columns else 0.0
+    costo_gastos = float(gastos_sin_combustible["Costo_CLP"].sum()) if "Costo_CLP" in gastos_sin_combustible.columns else 0.0
+    costo_total = costo_mantenciones + costo_gastos
+
+    mant_realizadas = len(mant_f)
+    repuestos_utilizados = len(gastos_sin_combustible)
+    equipos_registrados = len(equipos_f)
+
+    if "Proxima_Mantencion" not in proximas_originales.columns:
+        proximas_originales = pd.DataFrame(columns=[
+            "Equipo", "Categoria", "Tipo_Mantencion", "Proxima_Mantencion",
+            "Km_Horometro_Actual", "Unidad_Control", "Costo_CLP"
+        ])
+
+    mant_proximas = proximas_originales.copy()
+    if "Proxima_Mantencion" in mant_proximas.columns:
+        mant_proximas["Proxima_Mantencion"] = mant_proximas["Proxima_Mantencion"].apply(limpiar_numero)
+        mant_proximas = mant_proximas[mant_proximas["Proxima_Mantencion"] > 0].copy()
+
+    if filtro_equipo != "Todos los equipos" and "Equipo" in mant_proximas.columns:
+        mant_proximas = mant_proximas[mant_proximas["Equipo"] == filtro_equipo]
+
+    mant_proximas = resumen_proximas_por_equipo(mant_proximas) if not mant_proximas.empty else mant_proximas
+
+    if not mant_proximas.empty:
+        proxima_fila = mant_proximas.iloc[0]
+        equipo_proximo = str(proxima_fila.get("Equipo", "Sin equipo")).strip()
+        proxima_valor = proxima_fila.get("Proxima_Texto", "Sin dato")
+        proxima_estado = proxima_fila.get("Texto_Estado", "Sin análisis")
+        proxima_texto = equipo_proximo if equipo_proximo else "Sin equipo"
+        proxima_sub = f"Próx.: {proxima_valor} | {proxima_estado}"
+    else:
+        proxima_texto = "Sin registro"
+        proxima_sub = "No programada"
+
+    k1, k2, k3, k4, k5 = st.columns(5)
+    with k1:
+        kpi_card("🛠️", "Mantenciones", f"{mant_realizadas}", "Registros del período", "#dbeafe")
+    with k2:
+        kpi_card("💲", "Monto Total", pesos(costo_total), "Costos del período", "#dcfce7")
+    with k3:
+        kpi_card("🧰", "Gastos Adic.", f"{repuestos_utilizados}", "Repuestos, mantenciones y administrativos", "#f3e8ff")
+    with k4:
+        kpi_card("📅", "Próxima Mantención", proxima_texto, proxima_sub, "#ffedd5")
+    with k5:
+        kpi_card("🚚", "Equipos Registrados", f"{equipos_registrados}", "Total equipos", "#ccfbf1")
+
+    c1, c2 = st.columns([1.55, 1])
+
+    with c1:
+        st.markdown('<div class="panel-title">Histórico de Mantenciones</div>', unsafe_allow_html=True)
+        historico = mant_f.copy()
+        if "Tipo_Mantencion" in historico.columns:
+            historico["Mantencion"] = historico["Tipo_Mantencion"].apply(normalizar_tipo_mantencion)
+
+        if not historico.empty:
+            historico = historico.sort_values("Fecha", ascending=False).head(6)
+            columnas_base = ["Fecha", "Equipo", "Mantencion", "Descripcion", "Costo_CLP", "Estado_Mantencion"]
+            columnas_base = [c for c in columnas_base if c in historico.columns]
+            mostrar = historico[columnas_base].copy()
+            if "Fecha" in mostrar.columns:
+                mostrar["Fecha"] = mostrar["Fecha"].apply(fecha_texto)
+            if "Costo_CLP" in mostrar.columns:
+                mostrar["Costo_CLP"] = mostrar["Costo_CLP"].apply(pesos)
+            mostrar = mostrar.rename(columns={
+                "Mantencion": "Tipo",
+                "Descripcion": "Descripción",
+                "Costo_CLP": "Monto",
+                "Estado_Mantencion": "Estado",
+            })
+            mostrar_tabla_clara(mostrar, height=218)
+        else:
+            st.info("No existen mantenciones registradas para el filtro aplicado.")
+
+    with c2:
+        st.markdown('<div class="panel-title">Distribución de Costos</div>', unsafe_allow_html=True)
+        costos_item = construir_consolidado_costos(mant_f, gastos_f)
+        st.plotly_chart(crear_donut_costos(costos_item), use_container_width=True)
+
+    c3, c4, c5 = st.columns([1.22, 1.18, 1.18])
+
+    with c3:
+        st.markdown('<div class="panel-title">Gastos Adicionales</div>', unsafe_allow_html=True)
+        repuestos = gastos_sin_combustible.copy()
+        if not repuestos.empty:
+            repuestos = repuestos.sort_values("Fecha", ascending=False).head(4)
+            columnas_repuestos = ["Fecha", "Equipo", "Tipo_Gasto", "Descripcion", "Costo_CLP"]
+            columnas_repuestos = [c for c in columnas_repuestos if c in repuestos.columns]
+            mostrar = repuestos[columnas_repuestos].copy()
+            if "Fecha" in mostrar.columns:
+                mostrar["Fecha"] = mostrar["Fecha"].apply(fecha_texto)
+            if "Costo_CLP" in mostrar.columns:
+                mostrar["Costo_CLP"] = mostrar["Costo_CLP"].apply(pesos)
+            mostrar = mostrar.rename(columns={
+                "Tipo_Gasto": "Tipo",
+                "Descripcion": "Detalle",
+                "Costo_CLP": "Monto",
+            })
+            mostrar_tabla_clara(mostrar, height=142)
+        else:
+            st.info("No existen gastos adicionales registrados.")
+
+    with c4:
+        st.markdown('<div class="proximas-box">', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title">Próximas Mantenciones</div>', unsafe_allow_html=True)
+        proximas = mant_proximas.copy()
+        if not proximas.empty:
+            for _, fila in proximas.head(6).iterrows():
+                equipo = escape_html(fila.get("Equipo", "Sin equipo"))
+                categoria = escape_html(fila.get("Categoria", fila.get("Tipo_Mantencion", "")))
+                proxima_txt = escape_html(fila.get("Proxima_Texto", formatear_valor_control(fila.get("Proxima_Mantencion", 0), fila.get("Unidad_Control", ""))))
+                saldo = formatear_saldo_control(fila.get("Saldo_Restante", 0), fila.get("Unidad_Control", ""))
+                estado = str(fila.get("Estado_Control", ""))
+                clase = "badge-danger" if estado in ["Vencida", "Crítica", "Vence ahora"] else "badge-warning"
+                st.markdown(
+                    f"""
+                    <div class="next-item">
+                        <div>
+                            <div class="next-title">{equipo}</div>
+                            <div class="next-sub">{categoria}</div>
+                            <div class="next-sub">Próx.: {proxima_txt}</div>
+                        </div>
+                        <div class="badge-days {clase}">{escape_html(saldo)}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.info("No existen próximas mantenciones registradas.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with c5:
+        st.markdown('<div class="panel-title">Evolución de Costos</div>', unsafe_allow_html=True)
+        if not mant_f.empty or not gastos_sin_combustible.empty:
+            partes = []
+            if not mant_f.empty and "Fecha" in mant_f.columns and "Costo_CLP" in mant_f.columns:
+                a = mant_f[["Fecha", "Costo_CLP"]].copy()
+                a["Costo"] = a["Costo_CLP"].apply(limpiar_numero)
+                partes.append(a[["Fecha", "Costo"]])
+            if not gastos_sin_combustible.empty and "Fecha" in gastos_sin_combustible.columns and "Costo_CLP" in gastos_sin_combustible.columns:
+                b = gastos_sin_combustible[["Fecha", "Costo_CLP"]].copy()
+                b["Costo"] = b["Costo_CLP"].apply(limpiar_numero)
+                partes.append(b[["Fecha", "Costo"]])
+            if partes:
+                evolucion = pd.concat(partes, ignore_index=True)
+                evolucion["Fecha"] = evolucion["Fecha"].apply(convertir_fecha)
+                evolucion = evolucion.dropna(subset=["Fecha"])
+                if not evolucion.empty:
+                    evolucion["Año"] = evolucion["Fecha"].dt.year
+                    evolucion["Mes_Numero"] = evolucion["Fecha"].dt.month
+                    evolucion["Mes"] = evolucion["Mes_Numero"].map(MESES)
+                    evolucion["Periodo"] = evolucion["Mes"].fillna("") + " " + evolucion["Año"].astype(str)
+                    evolucion = evolucion.groupby(["Año", "Mes_Numero", "Periodo"], as_index=False)["Costo"].sum()
+                    evolucion = evolucion.sort_values(["Año", "Mes_Numero"])
+                    evolucion["Costo_Millones"] = evolucion["Costo"] / 1_000_000
+                    fig = px.line(evolucion, x="Periodo", y="Costo_Millones", markers=True, template="plotly_white", custom_data=["Costo"])
+                    fig.update_traces(line=dict(width=3), marker=dict(size=7), hovertemplate="Periodo: %{x}<br>Monto: %{customdata[0]:,.0f} $<br>Millones CLP: %{y:.2f} M<extra></extra>")
+                    fig.update_layout(title_text="", xaxis_title="", yaxis_title="", showlegend=False, margin=dict(l=8, r=8, t=2, b=8))
+                    fig.update_yaxes(tickformat=".2f", ticksuffix="M")
+                    fig = aplicar_formato_grafico(fig, 220)
+                    fig.update_layout(title_text="", margin=dict(l=16, r=12, t=2, b=28))
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("Sin costos con fecha para graficar.")
+            else:
+                st.info("Sin información de costos para graficar.")
+        else:
+            st.info("Sin información de costos para graficar.")
+
+    st.markdown('<div class="panel-title">Estado de los Equipos</div>', unsafe_allow_html=True)
+    cols = st.columns(min(7, max(1, len(equipos_f)))) if not equipos_f.empty else []
+    for idx, (_, fila) in enumerate(equipos_f.iterrows()):
+        with cols[idx % len(cols)]:
+            tarjeta_equipo(fila)
+
+
+st.markdown(
+    """
+<style>
+/* V5.6: sube el encabezado principal y aprovecha el espacio superior */
+.main .block-container,
+.block-container,
+div[data-testid="stMainBlockContainer"] {
+    padding-top: 0px !important;
+}
+.main-fixed-header {
+    min-height: 42px !important;
+    margin-top: -34px !important;
+    margin-bottom: -4px !important;
+    padding-top: 0px !important;
+    align-items: flex-end !important;
+}
+.main-fixed-title,
+.title-main {
+    font-size: clamp(28px, 2.15vw, 37px) !important;
+    line-height: 1.0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}
+.main-fixed-logo,
+.header-logo-box {
+    margin-top: 0px !important;
+    padding-top: 0px !important;
+}
+.main-fixed-logo img,
+.header-logo-box img {
+    width: 118px !important;
+    max-width: 118px !important;
+}
+.main-fixed-header-spacer,
+.header-separador {
+    height: 2px !important;
+    min-height: 2px !important;
+}
+
+/* V5.6: tabla de Gastos Adicionales más compacta y sin barra horizontal */
+.tabla-clara-wrap {
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+}
+.tabla-clara {
+    table-layout: fixed !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    font-size: 11.4px !important;
+}
+.tabla-clara thead th,
+.tabla-clara tbody td {
+    padding: 7px 8px !important;
+    white-space: normal !important;
+    word-break: normal !important;
+    overflow-wrap: anywhere !important;
+    line-height: 1.22 !important;
+}
+.tabla-clara td.monto,
+.tabla-clara th.monto,
+.tabla-clara td:last-child,
+.tabla-clara th:last-child {
+    white-space: nowrap !important;
+    overflow-wrap: normal !important;
+    text-align: right !important;
+}
+
+/* V5.6: botón de actualización más corto */
+section[data-testid="stSidebar"] div[data-testid="stButton"] button {
+    font-size: 13.6px !important;
+}
+</style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+
+# =========================================================
+# AJUSTE FINAL V5.9
+# - Habilita botón nativo para minimizar menú y agranda sidebar.
+# - Deja un espacio controlado bajo el título principal.
+# - Ajusta dona y evolución de costos dentro de sus marcos.
+# - Mejora resumen de próximas mantenciones en Dashboard.
+# =========================================================
+
+def crear_donut_costos(costos_item):
+    """Dona de costos ajustada para que porcentajes y leyenda queden dentro del marco."""
+    fig = go.Figure()
+
+    if costos_item is None or costos_item.empty:
+        fig.update_layout(
+            height=292,
+            paper_bgcolor="rgba(255,255,255,0.82)",
+            plot_bgcolor="rgba(255,255,255,0.82)",
+            annotations=[dict(text="Sin costos", x=0.5, y=0.5, showarrow=False, font_size=16, font_color="#0f172a")],
+            margin=dict(l=8, r=8, t=12, b=16),
+        )
+        return fig
+
+    total = float(costos_item["Costo"].sum())
+
+    fig.add_trace(
+        go.Pie(
+            labels=costos_item["Item"],
+            values=costos_item["Costo"],
+            hole=0.62,
+            sort=False,
+            direction="clockwise",
+            textinfo="percent",
+            texttemplate="%{percent:.1%}",
+            textposition="auto",
+            insidetextorientation="radial",
+            textfont=dict(color="white", size=13, family="Arial Black"),
+            outsidetextfont=dict(color="#0f172a", size=12, family="Arial Black"),
+            hovertemplate="<b>%{label}</b><br>Monto: %{customdata}<br>Participación: %{percent}<extra></extra>",
+            customdata=[pesos(v) for v in costos_item["Costo"]],
+            domain=dict(x=[0.05, 0.95], y=[0.30, 0.90]),
+            showlegend=True,
+        )
+    )
+
+    fig.update_layout(
+        height=292,
+        paper_bgcolor="rgba(255,255,255,0.82)",
+        plot_bgcolor="rgba(255,255,255,0.82)",
+        font=dict(color="#0f172a", size=12),
+        margin=dict(l=8, r=8, t=16, b=58),
+        annotations=[
+            dict(
+                text="Total<br><b>" + pesos(total) + "</b>",
+                x=0.50,
+                y=0.60,
+                xref="paper",
+                yref="paper",
+                font_size=14,
+                font_color="#0f172a",
+                showarrow=False,
+                align="center",
+            )
+        ],
+        legend=dict(
+            title=dict(text="Tipo de costo", font=dict(size=11, color="#0f172a")),
+            orientation="h",
+            x=0.50,
+            y=0.01,
+            xanchor="center",
+            yanchor="bottom",
+            font=dict(size=11, color="#0f172a", family="Arial"),
+            bgcolor="rgba(255,255,255,0.82)",
+            bordercolor="rgba(15,23,42,0.16)",
+            borderwidth=1,
+            itemclick=False,
+            itemdoubleclick=False,
+        ),
+        uniformtext_minsize=8,
+        uniformtext_mode="show",
+    )
+    return fig
+
+
+def pagina_dashboard(equipos_f, mant_f, gastos_f, combustible_f, proximas_originales, filtro_equipo):
+    """Dashboard Ejecutivo V5.9: distribución, próximas y evolución mejor encuadradas."""
+    gastos_sin_combustible = gastos_no_combustible(gastos_f)
+
+    costo_mantenciones = float(mant_f["Costo_CLP"].sum()) if "Costo_CLP" in mant_f.columns else 0.0
+    costo_gastos = float(gastos_sin_combustible["Costo_CLP"].sum()) if "Costo_CLP" in gastos_sin_combustible.columns else 0.0
+    costo_total = costo_mantenciones + costo_gastos
+
+    mant_realizadas = len(mant_f)
+    repuestos_utilizados = len(gastos_sin_combustible)
+    equipos_registrados = len(equipos_f)
+
+    if "Proxima_Mantencion" not in proximas_originales.columns:
+        proximas_originales = pd.DataFrame(columns=[
+            "Equipo", "Categoria", "Tipo_Mantencion", "Proxima_Mantencion",
+            "Km_Horometro_Actual", "Unidad_Control", "Costo_CLP"
+        ])
+
+    mant_proximas = proximas_originales.copy()
+    if "Proxima_Mantencion" in mant_proximas.columns:
+        mant_proximas["Proxima_Mantencion"] = mant_proximas["Proxima_Mantencion"].apply(limpiar_numero)
+        mant_proximas = mant_proximas[mant_proximas["Proxima_Mantencion"] > 0].copy()
+
+    if filtro_equipo != "Todos los equipos" and "Equipo" in mant_proximas.columns:
+        mant_proximas = mant_proximas[mant_proximas["Equipo"] == filtro_equipo]
+
+    mant_proximas = resumen_proximas_por_equipo(mant_proximas) if not mant_proximas.empty else mant_proximas
+
+    if not mant_proximas.empty:
+        proxima_fila = mant_proximas.iloc[0]
+        equipo_proximo = str(proxima_fila.get("Equipo", "Sin equipo")).strip()
+        proxima_valor = proxima_fila.get("Proxima_Texto", "Sin dato")
+        proxima_estado = proxima_fila.get("Texto_Estado", "Sin análisis")
+        proxima_texto = equipo_proximo if equipo_proximo else "Sin equipo"
+        proxima_sub = f"Próx.: {proxima_valor} | {proxima_estado}"
+    else:
+        proxima_texto = "Sin registro"
+        proxima_sub = "No programada"
+
+    k1, k2, k3, k4, k5 = st.columns(5)
+    with k1:
+        kpi_card("🛠️", "Mantenciones", f"{mant_realizadas}", "Registros del período", "#dbeafe")
+    with k2:
+        kpi_card("💲", "Monto Total", pesos(costo_total), "Costos del período", "#dcfce7")
+    with k3:
+        kpi_card("🧰", "Gastos Adic.", f"{repuestos_utilizados}", "Repuestos, mantenciones y administrativos", "#f3e8ff")
+    with k4:
+        kpi_card("📅", "Próxima Mantención", proxima_texto, proxima_sub, "#ffedd5")
+    with k5:
+        kpi_card("🚚", "Equipos Registrados", f"{equipos_registrados}", "Total equipos", "#ccfbf1")
+
+    c1, c2 = st.columns([1.55, 1])
+
+    with c1:
+        st.markdown('<div class="panel-title">Histórico de Mantenciones</div>', unsafe_allow_html=True)
+        historico = mant_f.copy()
+        if "Tipo_Mantencion" in historico.columns:
+            historico["Mantencion"] = historico["Tipo_Mantencion"].apply(normalizar_tipo_mantencion)
+
+        if not historico.empty:
+            historico = historico.sort_values("Fecha", ascending=False).head(6)
+            columnas_base = ["Fecha", "Equipo", "Mantencion", "Descripcion", "Costo_CLP", "Estado_Mantencion"]
+            columnas_base = [c for c in columnas_base if c in historico.columns]
+            mostrar = historico[columnas_base].copy()
+            if "Fecha" in mostrar.columns:
+                mostrar["Fecha"] = mostrar["Fecha"].apply(fecha_texto)
+            if "Costo_CLP" in mostrar.columns:
+                mostrar["Costo_CLP"] = mostrar["Costo_CLP"].apply(pesos)
+            mostrar = mostrar.rename(columns={
+                "Mantencion": "Tipo",
+                "Descripcion": "Descripción",
+                "Costo_CLP": "Monto",
+                "Estado_Mantencion": "Estado",
+            })
+            mostrar_tabla_clara(mostrar, height=230)
+        else:
+            st.info("No existen mantenciones registradas para el filtro aplicado.")
+
+    with c2:
+        st.markdown('<div class="dashboard-costos-spacer"></div>', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title chart-title dashboard-costos-title">Distribución de Costos</div>', unsafe_allow_html=True)
+        costos_item = construir_consolidado_costos(mant_f, gastos_f)
+        st.plotly_chart(crear_donut_costos(costos_item), use_container_width=True)
+
+    c3, c4, c5 = st.columns([1.10, 1.38, 1.36])
+
+    with c3:
+        st.markdown('<div class="panel-title">Gastos Adicionales</div>', unsafe_allow_html=True)
+        repuestos = gastos_sin_combustible.copy()
+        if not repuestos.empty:
+            repuestos = repuestos.sort_values("Fecha", ascending=False).head(4)
+            columnas_repuestos = ["Fecha", "Equipo", "Tipo_Gasto", "Descripcion", "Costo_CLP"]
+            columnas_repuestos = [c for c in columnas_repuestos if c in repuestos.columns]
+            mostrar = repuestos[columnas_repuestos].copy()
+            if "Fecha" in mostrar.columns:
+                mostrar["Fecha"] = mostrar["Fecha"].apply(fecha_texto)
+            if "Costo_CLP" in mostrar.columns:
+                mostrar["Costo_CLP"] = mostrar["Costo_CLP"].apply(pesos)
+            mostrar = mostrar.rename(columns={
+                "Tipo_Gasto": "Tipo",
+                "Descripcion": "Detalle",
+                "Costo_CLP": "Monto",
+            })
+            mostrar_tabla_clara(mostrar, height=122)
+        else:
+            st.info("No existen gastos adicionales registrados.")
+
+    with c4:
+        st.markdown('<div class="proximas-box dashboard-proximas">', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title">Próximas Mantenciones</div>', unsafe_allow_html=True)
+        proximas = mant_proximas.copy()
+        if not proximas.empty:
+            for _, fila in proximas.head(6).iterrows():
+                equipo = escape_html(fila.get("Equipo", "Sin equipo"))
+                categoria = escape_html(fila.get("Categoria", fila.get("Tipo_Mantencion", "")))
+                proxima_txt = escape_html(fila.get("Proxima_Texto", formatear_valor_control(fila.get("Proxima_Mantencion", 0), fila.get("Unidad_Control", ""))))
+                saldo = formatear_saldo_control(fila.get("Saldo_Restante", 0), fila.get("Unidad_Control", ""))
+                estado = str(fila.get("Estado_Control", ""))
+                clase = "badge-danger" if estado in ["Vencida", "Crítica", "Vence ahora"] else "badge-warning"
+                st.markdown(
+                    f"""
+                    <div class="next-item">
+                        <div class="next-info">
+                            <div class="next-title">{equipo}</div>
+                            <div class="next-sub-line">{categoria} · Próx.: {proxima_txt}</div>
+                        </div>
+                        <div class="badge-days {clase}">{escape_html(saldo)}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.info("No existen próximas mantenciones registradas.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with c5:
+        st.markdown('<div class="panel-title chart-title">Evolución de Costos</div>', unsafe_allow_html=True)
+        if not mant_f.empty or not gastos_sin_combustible.empty:
+            partes = []
+            if not mant_f.empty and "Fecha" in mant_f.columns and "Costo_CLP" in mant_f.columns:
+                a = mant_f[["Fecha", "Costo_CLP"]].copy()
+                a["Costo"] = a["Costo_CLP"].apply(limpiar_numero)
+                partes.append(a[["Fecha", "Costo"]])
+            if not gastos_sin_combustible.empty and "Fecha" in gastos_sin_combustible.columns and "Costo_CLP" in gastos_sin_combustible.columns:
+                b = gastos_sin_combustible[["Fecha", "Costo_CLP"]].copy()
+                b["Costo"] = b["Costo_CLP"].apply(limpiar_numero)
+                partes.append(b[["Fecha", "Costo"]])
+            if partes:
+                evolucion = pd.concat(partes, ignore_index=True)
+                evolucion["Fecha"] = evolucion["Fecha"].apply(convertir_fecha)
+                evolucion = evolucion.dropna(subset=["Fecha"])
+                if not evolucion.empty:
+                    evolucion["Año"] = evolucion["Fecha"].dt.year
+                    evolucion["Mes_Numero"] = evolucion["Fecha"].dt.month
+                    evolucion["Mes"] = evolucion["Mes_Numero"].map(MESES)
+                    evolucion["Periodo"] = evolucion["Mes"].fillna("") + " " + evolucion["Año"].astype(str)
+                    evolucion = evolucion.groupby(["Año", "Mes_Numero", "Periodo"], as_index=False)["Costo"].sum()
+                    evolucion = evolucion.sort_values(["Año", "Mes_Numero"])
+                    evolucion["Costo_Millones"] = evolucion["Costo"] / 1_000_000
+                    fig = px.line(evolucion, x="Periodo", y="Costo_Millones", markers=True, template="plotly_white", custom_data=["Costo"])
+                    fig.update_traces(line=dict(width=3), marker=dict(size=7), hovertemplate="Periodo: %{x}<br>Monto: %{customdata[0]:,.0f} $<br>Millones CLP: %{y:.2f} M<extra></extra>")
+                    fig.update_layout(title_text="", xaxis_title="", yaxis_title="", showlegend=False, margin=dict(l=48, r=18, t=18, b=42))
+                    fig.update_yaxes(tickformat=".2f", ticksuffix="M", rangemode="tozero")
+                    fig = aplicar_formato_grafico(fig, 250)
+                    fig.update_layout(title_text="", margin=dict(l=50, r=18, t=18, b=42))
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("Sin costos con fecha para graficar.")
+            else:
+                st.info("Sin información de costos para graficar.")
+        else:
+            st.info("Sin información de costos para graficar.")
+
+    st.markdown('<div class="panel-title equipos-title-dashboard">Estado de los Equipos</div>', unsafe_allow_html=True)
+    cols = st.columns(min(7, max(1, len(equipos_f)))) if not equipos_f.empty else []
+    for idx, (_, fila) in enumerate(equipos_f.iterrows()):
+        with cols[idx % len(cols)]:
+            tarjeta_equipo(fila)
+
+
+st.markdown(
+    """
+<style>
+/* V5.9 aplicado antes de cargar la pantalla */
+:root {
+    --menu-panel-width: 345px !important;
+    --menu-inner-width: 304px !important;
+    --menu-panel-width-final: 345px !important;
+    --menu-inner-width-final: 304px !important;
+}
+
+section[data-testid="stSidebar"] {
+    width: 345px !important;
+    min-width: 345px !important;
+    max-width: 345px !important;
+}
+section[data-testid="stSidebar"] > div,
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+    width: 345px !important;
+    min-width: 345px !important;
+    max-width: 345px !important;
+}
+[data-testid="stAppViewContainer"] > .main,
+section.main,
+main {
+    margin-left: 345px !important;
+    width: calc(100vw - 345px) !important;
+    max-width: calc(100vw - 345px) !important;
+}
+
+/* Vuelve visible el botón nativo para minimizar/expandir el menú */
+[data-testid="collapsedControl"],
+button[title="Collapse sidebar"],
+button[title="Close sidebar"],
+button[aria-label="Collapse sidebar"],
+button[aria-label="Close sidebar"] {
+    display: flex !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    pointer-events: auto !important;
+    height: 34px !important;
+    min-height: 34px !important;
+    width: 34px !important;
+    min-width: 34px !important;
+    z-index: 10050 !important;
+}
+
+.main .block-container,
+.block-container,
+div[data-testid="stMainBlockContainer"],
+section.main > div {
+    margin-top: -62px !important;
+    padding-top: 0px !important;
+}
+.main-fixed-header {
+    min-height: 58px !important;
+    height: 58px !important;
+    margin-top: 0px !important;
+    margin-bottom: 12px !important;
+    padding-top: 8px !important;
+    align-items: flex-end !important;
+}
+.main-fixed-title,
+.title-main {
+    font-size: clamp(28px, 2.1vw, 37px) !important;
+    line-height: 1.03 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}
+.main-fixed-logo img,
+.header-logo-box img {
+    width: 116px !important;
+    max-width: 116px !important;
+}
+.main-fixed-header-spacer,
+.header-separador {
+    height: 8px !important;
+    min-height: 8px !important;
+}
+
+.panel-title {
+    margin-top: 7px !important;
+    margin-bottom: 5px !important;
+}
+.chart-title {
+    margin-bottom: 2px !important;
+}
+
+/* Gráficos dentro del marco */
+[data-testid="stPlotlyChart"] {
+    overflow: hidden !important;
+    border-radius: 12px !important;
+    margin-bottom: 0px !important;
+}
+[data-testid="stPlotlyChart"] > div {
+    max-height: 310px !important;
+}
+
+/* Próximas mantenciones del Dashboard: compacto, sin montarse */
+.dashboard-proximas .next-item,
+.proximas-box .next-item {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto !important;
+    align-items: center !important;
+    column-gap: 8px !important;
+    min-height: 34px !important;
+    padding: 2px 0 !important;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.22) !important;
+}
+.dashboard-proximas .next-info,
+.proximas-box .next-info {
+    min-width: 0 !important;
+}
+.dashboard-proximas .next-title,
+.proximas-box .next-title {
+    font-size: 11.8px !important;
+    line-height: 1.02 !important;
+    margin-bottom: 1px !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+}
+.dashboard-proximas .next-sub-line,
+.proximas-box .next-sub-line,
+.dashboard-proximas .next-sub,
+.proximas-box .next-sub {
+    display: block !important;
+    font-size: 9.2px !important;
+    line-height: 1.05 !important;
+    margin: 0 !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+}
+.dashboard-proximas .badge-days,
+.proximas-box .badge-days {
+    min-width: 76px !important;
+    max-width: 86px !important;
+    font-size: 8.7px !important;
+    padding: 4px 6px !important;
+    white-space: nowrap !important;
+}
+</style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+
+# =========================================================
+# CORRECCIÓN FINAL URGENTE V6.1
+# - Menú desplegable real: botón para minimizar / expandir.
+# - Dashboard principal más compacto en Gastos / Próximas Mantenciones.
+# - Próximas mantenciones con estructura clara por equipo.
+# - Logo superior derecho SAIVAM más grande, manteniendo el fondo actual.
+# =========================================================
+
+def _menu_colapsado():
+    """Menú fijo. Se elimina la opción de minimizar/expandir para evitar perder el menú."""
+    st.session_state["menu_colapsado"] = False
+    return False
+
+
+def aplicar_ajustes_finales_ui():
+    """CSS final dinámico. Se llama antes y después de construir la página para ganar prioridad."""
+    colapsado = _menu_colapsado()
+    menu_w = 86 if colapsado else 276
+    inner_w = 58 if colapsado else 244
+    logo_w = 168
+
+    css_extra_colapsado = ""
+    if colapsado:
+        css_extra_colapsado = f"""
+section[data-testid="stSidebar"] .menu-text,
+section[data-testid="stSidebar"] .menu-footer-box,
+section[data-testid="stSidebar"] .menu-filter-area,
+section[data-testid="stSidebar"] .menu-botones-title {{
+    display: none !important;
+    visibility: hidden !important;
+    height: 0 !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}}
+
+section[data-testid="stSidebar"] .menu-brand {{
+    justify-content: center !important;
+    width: {inner_w}px !important;
+    max-width: {inner_w}px !important;
+    margin: 2px auto 8px auto !important;
+    gap: 0 !important;
+}}
+
+section[data-testid="stSidebar"] .menu-icon-img {{
+    width: 44px !important;
+    height: 44px !important;
+    min-width: 44px !important;
+    max-width: 44px !important;
+}}
+
+section[data-testid="stSidebar"] .menu-line {{
+    width: {inner_w}px !important;
+    max-width: {inner_w}px !important;
+    margin: 8px auto !important;
+}}
+
+section[data-testid="stSidebar"] .menu-active-item,
+section[data-testid="stSidebar"] div[data-testid="stButton"] button {{
+    justify-content: center !important;
+    text-align: center !important;
+    padding: 0 !important;
+    font-size: 20px !important;
+}}
+
+section[data-testid="stSidebar"] .menu-toggle-wrap,
+section[data-testid="stSidebar"] .menu-toggle-wrap div[data-testid="stButton"],
+section[data-testid="stSidebar"] .menu-toggle-wrap div[data-testid="stButton"] button {{
+    width: 48px !important;
+    min-width: 48px !important;
+    max-width: 48px !important;
+}}
+section[data-testid="stSidebar"] div[data-testid="stButton"],
+section[data-testid="stSidebar"] .menu-active-item,
+section[data-testid="stSidebar"] .menu-toggle-wrap {{
+    margin-left: auto !important;
+    margin-right: auto !important;
+}}
+
+section[data-testid="stSidebar"] div[data-testid="stButton"] button,
+section[data-testid="stSidebar"] .menu-active-item {{
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    text-align: center !important;
+}}
+
+section[data-testid="stSidebar"] div[data-testid="stButton"] button *,
+section[data-testid="stSidebar"] div[data-testid="stButton"] button p,
+section[data-testid="stSidebar"] .menu-active-item * {{
+    width: 100% !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    text-align: center !important;
+    margin-left: auto !important;
+    margin-right: auto !important;
+}}
+"""
 
     st.markdown(
         f"""
 <style>
-.tabla-general-wrap {{
-    width: 100%;
-    max-width: 100%;
-    overflow-x: hidden;
-    border: 1px solid rgba(30, 180, 120, .42);
-    border-radius: 13px;
-    background: rgba(8, 13, 17, .94);
+:root {{
+    --menu-panel-width: {menu_w}px !important;
+    --menu-inner-width: {inner_w}px !important;
+    --menu-panel-width-final: {menu_w}px !important;
+    --menu-inner-width-final: {inner_w}px !important;
+    --content-padding-x: 14px !important;
 }}
 
-.tabla-general-compacta {{
-    width: 100%;
-    max-width: 100%;
-    border-collapse: collapse;
-    table-layout: fixed;
-    font-size: {tamano_letra};
-    line-height: 1.08;
+section[data-testid="stSidebar"] {{
+    width: {menu_w}px !important;
+    min-width: {menu_w}px !important;
+    max-width: {menu_w}px !important;
+    top: 0 !important;
+    left: 0 !important;
+    background: #020617 !important;
+    transition: width .20s ease, min-width .20s ease, max-width .20s ease !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    z-index: 99999 !important;
 }}
 
-.tabla-general-compacta th,
-.tabla-general-compacta td {{
-    box-sizing: border-box;
-    padding: {padding_celda} !important;
-    border-right: 1px solid rgba(110, 125, 140, .18);
-    border-bottom: 1px solid rgba(110, 125, 140, .18);
-    text-align: left;
-    vertical-align: middle;
+section[data-testid="stSidebar"] > div,
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {{
+    width: {menu_w}px !important;
+    min-width: {menu_w}px !important;
+    max-width: {menu_w}px !important;
+    padding: 9px 12px 13px 12px !important;
+    box-sizing: border-box !important;
+    overflow-x: hidden !important;
 }}
 
-.tabla-general-compacta th {{
-    min-height: 25px;
-    background: #1b2029;
-    color: #b9bec8;
-    font-weight: 700;
+section[data-testid="stSidebar"] .menu-panel-content,
+section[data-testid="stSidebar"] .menu-brand,
+section[data-testid="stSidebar"] .menu-line,
+section[data-testid="stSidebar"] .menu-footer-box,
+section[data-testid="stSidebar"] div[data-testid="stButton"],
+section[data-testid="stSidebar"] div[data-testid="stSelectbox"],
+section[data-testid="stSidebar"] [data-baseweb="select"],
+section[data-testid="stSidebar"] [data-baseweb="select"] > div,
+section[data-testid="stSidebar"] .menu-active-item {{
+    width: {inner_w}px !important;
+    min-width: {inner_w}px !important;
+    max-width: {inner_w}px !important;
+    box-sizing: border-box !important;
+}}
+
+section[data-testid="stSidebar"] div[data-testid="stButton"] button,
+section[data-testid="stSidebar"] .menu-active-item {{
+    width: {inner_w}px !important;
+    min-width: {inner_w}px !important;
+    max-width: {inner_w}px !important;
+    min-height: 46px !important;
+    height: 46px !important;
+    border-radius: 14px !important;
+    margin-bottom: 7px !important;
+    box-sizing: border-box !important;
     white-space: nowrap !important;
-    word-break: keep-all !important;
-    overflow-wrap: normal !important;
-    text-align: center;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
 }}
 
-.tabla-general-compacta td {{
-    min-height: 23px;
-    color: #f3f7f5;
-    white-space: normal !important;
-    overflow-wrap: anywhere;
-    word-break: normal;
+section[data-testid="stSidebar"] .menu-toggle-wrap,
+section[data-testid="stSidebar"] .menu-toggle-wrap div[data-testid="stButton"],
+section[data-testid="stSidebar"] .menu-toggle-wrap div[data-testid="stButton"] button {{
+    width: 48px !important;
+    min-width: 48px !important;
+    max-width: 48px !important;
+    box-sizing: border-box !important;
 }}
 
-.tabla-general-compacta.tabla-ultracompacta th,
-.tabla-general-compacta.tabla-ultracompacta td {{
-    padding: 2px 2px !important;
-    line-height: 1.02 !important;
-}}
-
-.tabla-general-compacta.tabla-ultracompacta td {{
-    height: 22px;
+section[data-testid="stSidebar"] .menu-toggle-wrap div[data-testid="stButton"] button {{
+    height: 42px !important;
+    min-height: 42px !important;
+    padding: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
     text-align: center !important;
+    background: linear-gradient(135deg, #0ea5e9 0%, #2563eb 100%) !important;
+    border: 1px solid rgba(219,234,254,.95) !important;
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    font-size: 20px !important;
+    font-weight: 950 !important;
+    box-shadow: 0 8px 20px rgba(37,99,235,.35) !important;
 }}
 
-.tabla-general-compacta tr:last-child td {{
-    border-bottom: none;
+section[data-testid="stSidebar"] .menu-toggle-wrap {{
+    margin: 0 0 10px 0 !important;
 }}
 
-.tabla-general-compacta th:last-child,
-.tabla-general-compacta td:last-child {{
-    border-right: none;
+[data-testid="stAppViewContainer"] > .main,
+div[data-testid="stMain"],
+section.main,
+main {{
+    margin-left: {menu_w}px !important;
+    width: calc(100vw - {menu_w}px) !important;
+    max-width: calc(100vw - {menu_w}px) !important;
 }}
 
-.tabla-general-compacta tbody tr:hover td {{
-    background: rgba(31, 197, 133, .055);
+.main .block-container,
+.block-container,
+div[data-testid="stMainBlockContainer"] {{
+    padding-left: 14px !important;
+    padding-right: 14px !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
 }}
 
-.tabla-general-compacta .tabla-celda-centrada {{
-    text-align: center;
+.saivam-marca-principal {{
+    left: {menu_w}px !important;
+    width: calc(100vw - {menu_w}px) !important;
 }}
 
-.tabla-general-compacta .tabla-celda-arriba {{
-    vertical-align: top !important;
+.main-fixed-header {{
+    min-height: 58px !important;
+    height: 58px !important;
+    margin-bottom: 8px !important;
+    padding: 4px 12px 0 0 !important;
+    display: flex !important;
+    align-items: flex-end !important;
+    justify-content: space-between !important;
 }}
 
-.tabla-general-compacta a {{
-    color: #8EE7BE;
-    font-weight: 700;
-    text-decoration: none;
+.main-fixed-logo img,
+.header-logo-box img {{
+    width: {logo_w}px !important;
+    max-width: {logo_w}px !important;
+    height: auto !important;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    object-fit: contain !important;
 }}
 
-.tabla-general-compacta .tabla-link-boton {{
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 4px;
-    padding: 4px 8px;
-    border: 1px solid rgba(52, 211, 153, .55);
-    border-radius: 8px;
-    background: rgba(16, 185, 129, .12);
-    color: #A7F3D0 !important;
-    font-size: 9px;
-    font-weight: 800;
-    white-space: nowrap;
-    transition: all .16s ease;
+.main-fixed-title,
+.title-main {{
+    font-size: clamp(30px, 2.15vw, 40px) !important;
+    line-height: 1.03 !important;
+    margin: 0 !important;
+    padding: 0 !important;
 }}
 
-.tabla-general-compacta .tabla-link-boton:hover {{
-    background: rgba(16, 185, 129, .24);
-    border-color: rgba(110, 231, 183, .85);
-    color: #ECFDF5 !important;
-    transform: translateY(-1px);
+div[data-testid="stVerticalBlock"] {{
+    gap: 0.22rem !important;
+}}
+
+div[data-testid="stHorizontalBlock"] {{
+    gap: 0.78rem !important;
+}}
+
+.panel-title {{
+    display: block !important;
+    clear: both !important;
+    position: relative !important;
+    z-index: 5 !important;
+    color: #0f172a !important;
+    font-weight: 950 !important;
+    font-size: clamp(18px, 1.15vw, 22px) !important;
+    line-height: 1.22 !important;
+    min-height: 28px !important;
+    margin-top: 16px !important;
+    margin-bottom: 12px !important;
+    padding: 2px 0 6px 0 !important;
+    overflow: visible !important;
+}}
+
+.section-head {{
+    display: block !important;
+    clear: both !important;
+    position: relative !important;
+    z-index: 6 !important;
+    width: 100% !important;
+    margin: 2px 0 14px 0 !important;
+    padding: 0 0 2px 0 !important;
+    overflow: visible !important;
+}}
+
+.section-head .panel-title,
+.page-section-title {{
+    margin-top: 0 !important;
+    margin-bottom: 4px !important;
+    padding: 0 !important;
+    min-height: 26px !important;
+}}
+
+.panel-subtitle {{
+    display: block !important;
+    clear: both !important;
+    color: #334155 !important;
+    font-size: 15px !important;
+    line-height: 1.25 !important;
+    font-weight: 850 !important;
+    margin: 0 0 8px 0 !important;
+    padding: 0 !important;
+    position: relative !important;
+    z-index: 6 !important;
+}}
+
+[data-testid="stMarkdownContainer"]:has(.panel-title),
+[data-testid="stMarkdownContainer"]:has(.section-head) {{
+    overflow: visible !important;
+}}
+
+.tabla-clara-wrap {{
+    margin-top: 8px !important;
+}}
+
+.dashboard-proximas .panel-title,
+.proximas-box .panel-title,
+.chart-title,
+.panel-title.chart-title {{
+    margin-top: 0 !important;
+    margin-bottom: 8px !important;
+    min-height: 24px !important;
+    padding-bottom: 4px !important;
+}}
+
+.kpi-card {{
+    min-height: 118px !important;
+    padding: 15px 17px !important;
+}}
+
+.kpi-icon {{
+    width: 44px !important;
+    height: 44px !important;
+    margin-bottom: 7px !important;
+}}
+
+.dashboard-proximas,
+.proximas-box {{
+    background: rgba(255,255,255,.72) !important;
+    border: 1px solid rgba(203,213,225,.72) !important;
+    border-radius: 16px !important;
+    padding: 7px 10px !important;
+    margin-top: 0 !important;
+    box-shadow: 0 10px 24px rgba(15,23,42,.045) !important;
+}}
+
+.dashboard-proximas .next-item,
+.proximas-box .next-item {{
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) 96px !important;
+    align-items: center !important;
+    column-gap: 10px !important;
+    min-height: 54px !important;
+    padding: 7px 0 !important;
+    border-bottom: 1px solid rgba(148,163,184,.28) !important;
+}}
+
+.dashboard-proximas .next-item:last-child,
+.proximas-box .next-item:last-child {{
+    border-bottom: 0 !important;
+}}
+
+.dashboard-proximas .next-title,
+.proximas-box .next-title {{
+    font-size: 13.2px !important;
+    line-height: 1.14 !important;
+    font-weight: 950 !important;
+    color: #0f172a !important;
+    margin-bottom: 3px !important;
+    white-space: normal !important;
+    overflow: visible !important;
+}}
+
+.dashboard-proximas .next-sub,
+.dashboard-proximas .next-sub-line,
+.proximas-box .next-sub,
+.proximas-box .next-sub-line {{
+    font-size: 11.3px !important;
+    line-height: 1.18 !important;
+    font-weight: 750 !important;
+    color: #334155 !important;
+    margin: 0 !important;
+    white-space: normal !important;
+    overflow: visible !important;
+}}
+
+.dashboard-proximas .next-meta,
+.proximas-box .next-meta {{
+    display: flex !important;
+    gap: 8px !important;
+    flex-wrap: wrap !important;
+    margin-top: 2px !important;
+}}
+
+.dashboard-proximas .badge-days,
+.proximas-box .badge-days {{
+    width: 96px !important;
+    min-width: 96px !important;
+    max-width: 96px !important;
+    font-size: 10.2px !important;
+    line-height: 1.1 !important;
+    font-weight: 950 !important;
+    padding: 7px 6px !important;
+    white-space: normal !important;
+    text-align: center !important;
+    border-radius: 999px !important;
+}}
+
+.dashboard-compact-table [data-testid="stDataFrame"] {{
+    margin-top: 0 !important;
+}}
+
+div[data-testid="stPlotlyChart"] {{
+    margin-top: 0 !important;
+}}
+
+{css_extra_colapsado}
+
+@media (max-width: 1400px) {{
+    .main-fixed-logo img,
+    .header-logo-box img {{
+        width: 148px !important;
+        max-width: 148px !important;
+    }}
+
+    .main-fixed-title,
+    .title-main {{
+        font-size: clamp(27px, 2vw, 36px) !important;
+    }}
 }}
 </style>
         """,
         unsafe_allow_html=True,
     )
 
-    clase_tabla = (
-        "tabla-general-compacta tabla-ultracompacta notranslate"
-        if modo_ultracompacto
-        else "tabla-general-compacta notranslate"
+
+def construir_menu(equipos, mantenciones, gastos, combustible, checklist, documentos):
+    """Menú lateral con botón real de minimizar / expandir."""
+    colapsado = _menu_colapsado()
+
+    ruta_logo_menu = (
+        buscar_imagen_por_nombre("logoredondo")
+        or buscar_imagen_por_nombre("logo redondo")
+        or buscar_imagen_por_nombre("logo_redondo")
+        or buscar_imagen_por_nombre("logo-redondo")
     )
 
-    st.markdown(
-        (
-            '<div class="tabla-general-wrap notranslate" translate="no">'
-            f'<table class="{clase_tabla}" translate="no">'
-            f'{colgroup_html}'
-            f'<thead><tr>{encabezados_html}</tr></thead>'
-            f'<tbody>{"".join(filas_html)}</tbody>'
-            '</table>'
+    if ruta_logo_menu:
+        logo_menu_b64 = archivo_a_base64(ruta_logo_menu)
+        logo_menu_mime = extension_mime(ruta_logo_menu)
+        icono_menu_html = (
+            '<div class="menu-icon-img">'
+            f'<img src="data:{logo_menu_mime};base64,{logo_menu_b64}" alt="Logo menú">'
             '</div>'
-        ),
+        )
+    else:
+        icono_menu_html = '<div class="menu-icon">🚜</div>'
+
+    estado_menu_css = "menu-state-collapsed" if colapsado else "menu-state-expanded"
+
+    st.markdown(
+        f"""
+        <div class="menu-bg"></div>
+        <div class="menu-marker {estado_menu_css}"></div>
+        <div class="menu-panel-content">
+            <div class="menu-brand">
+                {icono_menu_html}
+                <div class="menu-text">
+                    <div class="menu-title">SEGUIMIENTO<br>EQUIPOS MÓVILES</div>
+                    <div class="menu-subtitle">SAIVAM · MULCHÉN</div>
+                </div>
+            </div>
+            <hr class="menu-line">
+        </div>
+        """,
         unsafe_allow_html=True,
     )
 
+    # Menú fijo: se elimina el botón de minimizar/expandir.
+    st.markdown('<div class="menu-fixed-spacer"></div>', unsafe_allow_html=True)
 
-# =========================================================
-# ESTILO VISUAL — FORMATO TIPO PANEL EQUIPOS MÓVILES
-# =========================================================
-
-def obtener_data_uri_recurso(rutas):
-    """Convierte un recurso local en data URI para usarlo en CSS/HTML."""
-    for ruta in rutas:
-        if ruta and os.path.exists(ruta) and os.path.isfile(ruta):
-            try:
-                mime = mimetypes.guess_type(ruta)[0] or "image/png"
-                with open(ruta, "rb") as archivo:
-                    contenido = base64.b64encode(archivo.read()).decode("utf-8")
-                return f"data:{mime};base64,{contenido}"
-            except Exception:
-                continue
-    return ""
-
-
-def buscar_imagen_local(nombre_base):
-    """Busca una imagen dentro de la carpeta de la aplicación y sus subcarpetas."""
-    extensiones = [".png", ".jpg", ".jpeg", ".webp"]
-    carpetas = ["", "fotos", "imagenes", "images", "img", "assets"]
-
-    for carpeta in carpetas:
-        for extension in extensiones:
-            ruta = ruta_app(carpeta, f"{nombre_base}{extension}") if carpeta else ruta_app(f"{nombre_base}{extension}")
-            if os.path.isfile(ruta):
-                return ruta
-
-    # Búsqueda adicional sin distinguir mayúsculas/minúsculas.
-    objetivo = normalizar_texto(nombre_base)
-    patrones = []
-    for extension in extensiones:
-        patrones.extend([
-            ruta_app(f"*{extension}"),
-            ruta_app("*", f"*{extension}"),
-        ])
-
-    for patron in patrones:
-        for ruta in glob.glob(patron):
-            base = os.path.splitext(os.path.basename(ruta))[0]
-            if normalizar_texto(base) == objetivo and os.path.isfile(ruta):
-                return ruta
-
-    return ""
-
-
-def obtener_imagen_html(nombre_base, clase="brand-logo-img", alt="SAIVAM"):
-    ruta = buscar_imagen_local(nombre_base)
-    imagen_uri = obtener_data_uri_recurso([ruta]) if ruta else ""
-    if imagen_uri:
-        return f'<img class="{clase}" src="{imagen_uri}" alt="{escape_html(alt)}">'
-    return ""
-
-
-def obtener_logo_respaldo_html(clase="brand-logo-img"):
-    logo_uri = obtener_data_uri_recurso([
-        ruta_app("logo_saivam.png"),
-        ruta_app("saivam_logo.png"),
-        ruta_app("SAIVAM.png"),
-        ruta_app("saivam.png"),
-        ruta_app("fotos", "logo_saivam.png"),
-        ruta_app("fotos", "saivam.png"),
-    ])
-    if logo_uri:
-        return f'<img class="{clase}" src="{logo_uri}" alt="SAIVAM">'
-    return (
-        '<div class="brand-fallback">'
-        '<span class="brand-mark">S</span><span class="brand-name">SAIVAM</span>'
-        '</div>'
-    )
-
-
-def obtener_logo_sidebar_html():
-    # Imagen solicitada para el encabezado del menú lateral.
-    return obtener_imagen_html("logoredondo", "brand-logo-img", "Logo redondo SAIVAM") or obtener_logo_respaldo_html()
-
-
-def obtener_logo_principal_html():
-    # Imagen solicitada para la esquina superior derecha del panel.
-    return obtener_imagen_html("logo1", "brand-logo-img", "Logo SAIVAM") or obtener_logo_respaldo_html()
-
-
-
-def obtener_carpetas_reconocimientos():
-    # Localiza la carpeta aunque cambie mayúsculas o use plural.
-    carpeta_static = ruta_app("static")
-    if not os.path.isdir(carpeta_static):
-        return []
-
-    nombres_validos = {
-        "reconocimiento",
-        "reconocimientos",
-        "recognition",
-        "recognitions",
+    paginas_menu = {
+        "panel": ("📊", "Dashboard Ejecutivo"),
+        "equipos": ("🚚", "Equipos"),
+        "mantenciones": ("🛠️", "Mantenciones"),
+        "repuestos": ("🧾", "Gastos Adicionales"),
+        "costos": ("💰", "Costos"),
+        "proximas": ("📅", "Próximas Mantenciones"),
+        "alertas": ("🔔", "Alertas"),
+        "documentos": ("📁", "Documentación Legal"),
     }
 
-    carpetas = []
-    for raiz, subcarpetas, _ in os.walk(carpeta_static):
-        for subcarpeta in subcarpetas:
-            if normalizar_texto(subcarpeta) in nombres_validos:
-                ruta = os.path.join(raiz, subcarpeta)
-                if ruta not in carpetas:
-                    carpetas.append(ruta)
+    pagina_actual = st.query_params.get("pagina", "panel")
+    if pagina_actual not in paginas_menu:
+        pagina_actual = "panel"
+        st.query_params["pagina"] = "panel"
 
-    for ruta in [
-        ruta_app("static", "reconocimiento"),
-        ruta_app("static", "reconocimientos"),
-    ]:
-        if os.path.isdir(ruta) and ruta not in carpetas:
-            carpetas.append(ruta)
+    st.markdown('<div class="menu-botones-title"></div>', unsafe_allow_html=True)
 
-    return carpetas
+    for clave, (icono, nombre) in paginas_menu.items():
+        es_actual = clave == pagina_actual
+        texto_completo = f"{icono} {nombre}"
+        texto_visible = icono if colapsado else texto_completo
 
+        if es_actual:
+            st.markdown(
+                f'<div class="menu-active-item" title="{escape_html(nombre)}">{escape_html(texto_visible)}</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            if st.button(
+                texto_visible,
+                key=f"menu_{clave}",
+                help=nombre,
+                use_container_width=True,
+            ):
+                st.query_params["pagina"] = clave
+                st.rerun()
 
-def listar_fotos_reconocimientos():
-    # Lista todas las imágenes disponibles dentro de la carpeta del módulo.
-    extensiones_validas = {
-        ".png", ".jpg", ".jpeg", ".webp", ".jfif",
-        ".bmp", ".gif", ".tif", ".tiff", ".avif",
-    }
+    st.markdown('<hr class="menu-line">', unsafe_allow_html=True)
 
-    archivos = []
-    for carpeta in obtener_carpetas_reconocimientos():
-        for raiz, _, nombres in os.walk(carpeta):
-            for nombre in nombres:
-                ruta = os.path.join(raiz, nombre)
-                extension = os.path.splitext(nombre)[1].lower()
-                if os.path.isfile(ruta) and extension in extensiones_validas:
-                    archivos.append(ruta)
+    if st.button("🔄" if colapsado else "🔄 Actualizar", key="actualizar_base_datos", help="Actualizar datos", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
 
-    return sorted(set(archivos))
+    pagina = f"{paginas_menu[pagina_actual][0]} {paginas_menu[pagina_actual][1]}"
 
-
-def buscar_foto_reconocimiento(*nombres_base):
-    # Busca una fotografía por uno o más nombres posibles.
-    archivos = listar_fotos_reconocimientos()
-    objetivos = [
-        normalizar_texto(nombre)
-        for nombre in nombres_base
-        if str(nombre).strip()
-    ]
-
-    # Coincidencia exacta.
-    for ruta in archivos:
-        base = normalizar_texto(os.path.splitext(os.path.basename(ruta))[0])
-        if base in objetivos:
-            return ruta
-
-    # Coincidencia flexible para sufijos añadidos por Windows.
-    for ruta in archivos:
-        base = normalizar_texto(os.path.splitext(os.path.basename(ruta))[0])
-        for objetivo in objetivos:
-            if base.startswith(objetivo) or objetivo.startswith(base):
-                return ruta
-
-    return ""
-
-
-
-
-def obtener_fotos_reconocimientos():
-    # Fotografías visibles en la galería de reconocimientos, sin duplicados.
-    # Las imágenes configuradas aparecen primero en el orden indicado.
-    # Cualquier fotografía adicional que se cargue en la carpeta también se
-    # incorpora automáticamente, sin necesidad de modificar nuevamente el código.
-    configuracion = [
-        (("elj",), "ELJ"),
-        (("mariaa", "maria", "maria_araya"), "María"),
-        (("saivam500", "saivam_500"), "SAIVAM 500"),
-        (("ricardog", "ricardo_g", "ricardo"), "Ricardo"),
-        (("saivam700", "saivam_700"), "SAIVAM 700"),
-        (("estebana", "esteban_a", "esteban"), "Esteban"),
-        (("hectora", "hector_a", "hector"), "Héctor"),
-        (("pedroa", "pedro_a", "pedro"), "Pedro"),
-        (("1200d", "1200_d", "1200dias", "1200_dias"), "1.200 días sin accidentes"),
-        (("tresreconocidos", "tres_reconocidos"), "Tres reconocidos"),
-        (("claudioa", "clauidoa", "claudio", "claudia", "claudiaa"), "Claudio"),
-        (("grupojose", "grupo_jose"), "Grupo José"),
-        (("isaac",), "Isaac"),
-        (("pedrom", "pedro_m"), "Pedro M."),
-        (("grupojuan", "grupo_juan"), "Grupo Juan"),
-        (("manuel",), "Manuel"),
-    ]
-
-    fotos = []
-    rutas_usadas = set()
-
-    # Primero agrega las fotografías configuradas en el orden definido.
-    for nombres_posibles, titulo in configuracion:
-        ruta = buscar_foto_reconocimiento(*nombres_posibles)
-
-        if ruta and ruta not in rutas_usadas:
-            fotos.append({
-                "ruta": ruta,
-                "titulo": titulo,
-                "archivo": os.path.basename(ruta),
-            })
-            rutas_usadas.add(ruta)
-
-    # Después incorpora automáticamente cualquier imagen nueva que todavía no
-    # esté configurada. Así, basta con subirla a static/reconocimiento o
-    # static/reconocimientos para que aparezca en la galería.
-    for ruta in listar_fotos_reconocimientos():
-        if ruta in rutas_usadas:
-            continue
-
-        nombre_base = os.path.splitext(os.path.basename(ruta))[0]
-        titulo_automatico = re.sub(r"[_-]+", " ", nombre_base).strip().title()
-
-        fotos.append({
-            "ruta": ruta,
-            "titulo": titulo_automatico or "Reconocimiento",
-            "archivo": os.path.basename(ruta),
-        })
-        rutas_usadas.add(ruta)
-
-    return fotos
-
-
-def mostrar_fotos_reconocimientos():
-    # Muestra una sola fotografía y los controles debajo de la imagen.
-    fotos = obtener_fotos_reconocimientos()
-
-    panel_titulo("Galería de Reconocimientos")
-
-    if not fotos:
-        st.info(
-            "No se encontraron fotografías en `static/reconocimiento/`. "
-            "Verifica que los archivos configurados estén dentro de esa carpeta."
-        )
-        return
-
-    clave_indice = "indice_foto_reconocimiento"
-
-    if clave_indice not in st.session_state:
-        st.session_state[clave_indice] = 0
-
-    if st.session_state[clave_indice] >= len(fotos):
-        st.session_state[clave_indice] = 0
-
-    indice_actual = st.session_state[clave_indice]
-    foto = fotos[indice_actual]
-    imagen_uri = obtener_data_uri_recurso([foto["ruta"]])
-
-    # Fotografía sin nombre o texto inferior.
-    if imagen_uri:
-        html_foto = (
-            '<div class="recognition-carousel-wrapper">'
-            '<div class="recognition-photo-card">'
-            f'<img class="recognition-photo-img" src="{imagen_uri}" '
-            f'alt="Fotografía de reconocimiento">'
-            '</div>'
-            '</div>'
-        )
-        st.markdown(html_foto, unsafe_allow_html=True)
-    else:
-        st.image(
-            foto["ruta"],
-            width="stretch",
-        )
-
-    # Botones ubicados debajo de la fotografía.
-    espacio_izq, boton_anterior, indicador, boton_siguiente, espacio_der = st.columns(
-        [1.15, 1, 0.75, 1, 1.15]
+    equipos_disponibles = (
+        ["Todos los equipos"]
+        + equipos["Equipo"]
+        .dropna()
+        .astype(str)
+        .str.strip()
+        .loc[lambda x: x != ""]
+        .drop_duplicates()
+        .tolist()
     )
 
-    with boton_anterior:
-        if st.button(
-            "⬅️ Anterior",
-            key="foto_reconocimiento_anterior",
-            use_container_width=True,
-        ):
-            st.session_state[clave_indice] = (
-                st.session_state[clave_indice] - 1
-            ) % len(fotos)
-            st.rerun()
+    anios_base = pd.concat(
+        [
+            mantenciones["Año"],
+            gastos["Año"],
+            combustible["Año"],
+            checklist["Año"],
+            documentos["Año"],
+        ],
+        ignore_index=True,
+    )
 
-    with indicador:
+    anios_disponibles = sorted(
+        [
+            int(x)
+            for x in anios_base.dropna().unique().tolist()
+            if str(x) != "nan"
+        ]
+    )
+
+    opciones_anio = ["Todos"] + anios_disponibles
+    opciones_mes = ["Todos"] + list(MESES.values())
+
+    if st.session_state.get("filtro_equipo_menu", "Todos los equipos") not in equipos_disponibles:
+        st.session_state["filtro_equipo_menu"] = "Todos los equipos"
+    if st.session_state.get("filtro_anio_menu", "Todos") not in opciones_anio:
+        st.session_state["filtro_anio_menu"] = "Todos"
+    if st.session_state.get("filtro_mes_menu", "Todos") not in opciones_mes:
+        st.session_state["filtro_mes_menu"] = "Todos"
+
+    if not colapsado:
+        st.markdown('<hr class="menu-line"><div class="menu-filter-area">', unsafe_allow_html=True)
+        filtro_equipo = st.selectbox("Equipo", equipos_disponibles, key="filtro_equipo_menu")
+        filtro_anio = st.selectbox("Año", opciones_anio, key="filtro_anio_menu")
+        filtro_mes = st.selectbox("Mes", opciones_mes, key="filtro_mes_menu")
+        st.markdown('</div>', unsafe_allow_html=True)
+
         st.markdown(
-            (
-                '<div class="recognition-carousel-counter">'
-                f'{indice_actual + 1} / {len(fotos)}'
-                '</div>'
-            ),
+            f"""
+            <div class="menu-footer-box">
+                <div class="menu-info">
+                    <b>Contrato:</b> {CONTRATO}<br>
+                    <b>Cliente:</b> {CLIENTE}<br>
+                    <b>Versión:</b> {VERSION}<br>
+                    <b>Actualización:</b><br>
+                    {datetime.now().strftime("%d/%m/%Y %H:%M")}
+                </div>
+            </div>
+            """,
             unsafe_allow_html=True,
         )
-
-    with boton_siguiente:
-        if st.button(
-            "Siguiente ➡️",
-            key="foto_reconocimiento_siguiente",
-            use_container_width=True,
-        ):
-            st.session_state[clave_indice] = (
-                st.session_state[clave_indice] + 1
-            ) % len(fotos)
-            st.rerun()
-
-
-
-
-
-def obtener_carpetas_certificaciones():
-    # Localiza la carpeta de imágenes del módulo Certificaciones.
-    carpetas = []
-
-    rutas_directas = [
-        ruta_app("static", "certificaciones"),
-        ruta_app("static", "certificacion"),
-        ruta_app("static-certificaciones"),
-        ruta_app("static_certificaciones"),
-    ]
-
-    for ruta in rutas_directas:
-        if os.path.isdir(ruta) and ruta not in carpetas:
-            carpetas.append(ruta)
-
-    carpeta_static = ruta_app("static")
-    nombres_validos = {
-        "certificacion",
-        "certificaciones",
-        "certification",
-        "certifications",
-    }
-
-    if os.path.isdir(carpeta_static):
-        for raiz, subcarpetas, _ in os.walk(carpeta_static):
-            for subcarpeta in subcarpetas:
-                if normalizar_texto(subcarpeta) in nombres_validos:
-                    ruta = os.path.join(raiz, subcarpeta)
-                    if ruta not in carpetas:
-                        carpetas.append(ruta)
-
-    return carpetas
-
-
-def listar_fotos_certificaciones():
-    extensiones_validas = {
-        ".png", ".jpg", ".jpeg", ".webp", ".jfif",
-        ".bmp", ".gif", ".tif", ".tiff", ".avif",
-    }
-
-    archivos = []
-
-    for carpeta in obtener_carpetas_certificaciones():
-        for raiz, _, nombres in os.walk(carpeta):
-            for nombre in nombres:
-                ruta = os.path.join(raiz, nombre)
-                extension = os.path.splitext(nombre)[1].lower()
-
-                if os.path.isfile(ruta) and extension in extensiones_validas:
-                    archivos.append(ruta)
-
-    return sorted(set(archivos))
-
-
-def buscar_foto_certificacion(*nombres_base):
-    archivos = listar_fotos_certificaciones()
-    objetivos = {
-        normalizar_texto(nombre)
-        for nombre in nombres_base
-        if str(nombre).strip()
-    }
-
-    # Coincidencia exacta.
-    for ruta in archivos:
-        nombre = os.path.splitext(os.path.basename(ruta))[0]
-        if normalizar_texto(nombre) in objetivos:
-            return ruta
-
-    # Coincidencia flexible para nombres con sufijos.
-    for ruta in archivos:
-        nombre = normalizar_texto(
-            os.path.splitext(os.path.basename(ruta))[0]
-        )
-
-        for objetivo in objetivos:
-            if nombre.startswith(objetivo) or objetivo.startswith(nombre):
-                return ruta
-
-    return ""
-
-
-def obtener_ficha_certificacion(df, aliases):
-    if df is None or df.empty or "Subcategoria" not in df.columns:
-        return None
-
-    base = df.copy()
-
-    if "Categoria" in base.columns:
-        categoria = base["Categoria"].fillna("").apply(normalizar_texto)
-        base = base[categoria == "equipos"].copy()
-
-    if base.empty:
-        return None
-
-    subcategorias = base["Subcategoria"].fillna("").apply(normalizar_texto)
-    aliases_normalizados = {
-        normalizar_texto(alias)
-        for alias in aliases
-    }
-
-    coincidencia = subcategorias.isin(aliases_normalizados)
-
-    if not coincidencia.any():
-        coincidencia = subcategorias.apply(
-            lambda valor: any(
-                alias in valor or valor in alias
-                for alias in aliases_normalizados
-                if alias and valor
-            )
-        )
-
-    filas = base.loc[coincidencia]
-
-    if filas.empty:
-        return None
-
-    return filas.iloc[0]
-
-
-def clase_estado_certificacion(estado):
-    estado_normalizado = normalizar_texto(estado)
-
-    if estado_normalizado == "vigente":
-        return "cert-status-vigente"
-
-    if estado_normalizado == "por_vencer":
-        return "cert-status-por-vencer"
-
-    if estado_normalizado == "vencida":
-        return "cert-status-vencida"
-
-    return "cert-status-sin-vencimiento"
-
-
-def texto_dias_certificacion(dias, estado):
-    if pd.isna(dias) or str(dias).strip() in ["", "<NA>", "nan"]:
-        return "Sin fecha de vencimiento"
-
-    try:
-        dias_numero = int(float(dias))
-    except (TypeError, ValueError):
-        return "Vigencia no disponible"
-
-    estado_normalizado = normalizar_texto(estado)
-
-    if estado_normalizado == "vencida":
-        return f"Vencida hace {abs(dias_numero)} días"
-
-    if dias_numero == 0:
-        return "Vence hoy"
-
-    if dias_numero == 1:
-        return "Vence en 1 día"
-
-    return f"Vence en {dias_numero} días"
-
-
-def mostrar_equipos_certificados(df):
-    configuracion = [
-        {
-            "archivo": ("alza_hombre", "alzahombre", "alza hombre"),
-            "titulo": "Alzahombre",
-            "aliases": (
-                "Alzahombre",
-                "Alza hombre",
-                "Alza_hombre",
-            ),
-        },
-        {
-            "archivo": ("barredora", "barredora_hombre_a_bordo"),
-            "titulo": "Barredora",
-            "aliases": (
-                "Barredora",
-                "Barredora hombre a bordo",
-                "Barredora Tennant",
-            ),
-        },
-        {
-            "archivo": ("camion_ford", "camion", "camión_ford"),
-            "titulo": "Camión Ford",
-            "aliases": (
-                "Camion",
-                "Camión",
-                "Camion Ford",
-                "Camión Ford",
-            ),
-        },
-        {
-            "archivo": (
-                "grua_orquilla",
-                "grua_horquilla",
-                "grúa_horquilla",
-            ),
-            "titulo": "Grúa horquilla",
-            "aliases": (
-                "Grúa horquilla",
-                "Grua horquilla",
-                "Grúa orquilla",
-                "Grua orquilla",
-            ),
-        },
-        {
-            "archivo": ("minicargador", "mini_cargador"),
-            "titulo": "Minicargador",
-            "aliases": (
-                "Minicargador",
-                "Mini cargador",
-            ),
-        },
-    ]
-
-    panel_titulo("Equipos certificados")
-
-    columnas = st.columns(len(configuracion))
-
-    for columna, equipo in zip(columnas, configuracion):
-        ruta = buscar_foto_certificacion(*equipo["archivo"])
-        imagen_uri = obtener_data_uri_recurso([ruta]) if ruta else ""
-        fila = obtener_ficha_certificacion(df, equipo["aliases"])
-
-        if fila is not None:
-            certificacion = str(
-                fila.get("Nombre_Certificacion", "")
-            ).strip()
-            entidad = str(
-                fila.get("Entidad_Emisora", "")
-            ).strip()
-            estado = str(
-                fila.get("Estado", "Sin vencimiento")
-            ).strip()
-            vencimiento = fecha_texto(
-                fila.get("Vencimiento", pd.NaT)
-            )
-            dias = fila.get("Dias_Para_Vencer", pd.NA)
-        else:
-            certificacion = "Sin registro asociado"
-            entidad = ""
-            estado = "Sin vencimiento"
-            vencimiento = ""
-            dias = pd.NA
-
-        clase_estado = clase_estado_certificacion(estado)
-        texto_dias = texto_dias_certificacion(dias, estado)
-
-        if imagen_uri:
-            imagen_html = (
-                f'<img class="cert-equipment-img" '
-                f'src="{imagen_uri}" '
-                f'alt="{escape_html(equipo["titulo"])}">'
-            )
-        else:
-            imagen_html = (
-                '<div class="cert-equipment-placeholder">'
-                '📷'
-                '</div>'
-            )
-
-        entidad_html = (
-            f'<div class="cert-equipment-detail">'
-            f'<span>Entidad:</span> {escape_html(entidad)}'
-            f'</div>'
-            if entidad
-            else ""
-        )
-
-        vencimiento_html = (
-            f'<div class="cert-equipment-detail">'
-            f'<span>Vencimiento:</span> {escape_html(vencimiento)}'
-            f'</div>'
-            if vencimiento
-            else ""
-        )
-
-        tarjeta = (
-            '<div class="cert-equipment-card">'
-            '<div class="cert-equipment-image-shell">'
-            f'{imagen_html}'
-            '</div>'
-            f'<div class="cert-equipment-title">'
-            f'{escape_html(equipo["titulo"])}'
-            '</div>'
-            f'<div class="cert-equipment-detail">'
-            f'<span>Certificación:</span> '
-            f'{escape_html(certificacion)}'
-            '</div>'
-            f'{entidad_html}'
-            f'<div class="cert-equipment-status {clase_estado}">'
-            f'{escape_html(estado)}'
-            '</div>'
-            f'{vencimiento_html}'
-            f'<div class="cert-equipment-days">'
-            f'{escape_html(texto_dias)}'
-            '</div>'
-            '</div>'
-        )
-
-        with columna:
-            st.markdown(tarjeta, unsafe_allow_html=True)
-
-
-
-def obtener_sello_certificaciones_html():
-    # Sello de agua exclusivo del módulo Certificaciones.
-    # Rutas reconocidas:
-    # static/certificaciones/sello.png
-    # static-certificaciones/sello.png
-    ruta = buscar_foto_certificacion(
-        "sello",
-        "sello_certificaciones",
-        "sello_certificacion",
-    )
-
-    imagen_uri = obtener_data_uri_recurso([ruta]) if ruta else ""
-
-    if not imagen_uri:
-        return ""
-
-    return (
-        '<div class="certification-watermark-layer" aria-hidden="true">'
-        f'<img class="certification-watermark-img" '
-        f'src="{imagen_uri}" alt="">'
-        '</div>'
-    )
-
-
-def obtener_sello_reconocimientos_html():
-    # Sello de agua exclusivo del módulo Reconocimientos.
-    # Ruta principal esperada:
-    # static/reconocimientos/saivam700.png
-    ruta = buscar_foto_reconocimiento(
-        "saivam700",
-        "saivam_700",
-    )
-
-    imagen_uri = obtener_data_uri_recurso([ruta]) if ruta else ""
-
-    if not imagen_uri:
-        return ""
-
-    return (
-        '<div class="recognition-watermark-layer" aria-hidden="true">'
-        f'<img class="recognition-watermark-img" src="{imagen_uri}" alt="">'
-        '</div>'
-    )
-
-
-def obtener_sello_agua_html():
-    """Carga la imagen 'agua' como sello de agua exclusivo del Panel General."""
-    ruta = buscar_imagen_local("agua")
-    imagen_uri = obtener_data_uri_recurso([ruta]) if ruta else ""
-    if not imagen_uri:
-        return ""
-    return (
-        '<div class="panel-watermark-layer" aria-hidden="true">'
-        f'<img class="panel-watermark-img" src="{imagen_uri}" alt="">'
-        '</div>'
-    )
-
-
-def obtener_sello_cumplimientos_html():
-    """Carga la imagen 'saivam' como sello de agua de Cumplimientos SSO."""
-    ruta = buscar_imagen_local("saivam")
-    imagen_uri = obtener_data_uri_recurso([ruta]) if ruta else ""
-    if not imagen_uri:
-        return ""
-    return (
-        '<div class="cumplimientos-watermark-layer" aria-hidden="true">'
-        f'<img class="cumplimientos-watermark-img" src="{imagen_uri}" alt="">'
-        '</div>'
-    )
-
-
-def obtener_sello_saivam_global_html():
-    """Carga la imagen 'saivam' completa como sello de agua para los módulos."""
-    ruta = buscar_imagen_local("saivam")
-    imagen_uri = obtener_data_uri_recurso([ruta]) if ruta else ""
-
-    if not imagen_uri:
-        return ""
-
-    return (
-        '<div class="saivam-page-watermark-layer" aria-hidden="true">'
-        f'<img class="saivam-page-watermark-img" src="{imagen_uri}" alt="">'
-        '</div>'
-    )
-
-
-def mostrar_sello_saivam_pagina():
-    """Inserta el sello SAIVAM sobre el fondo y de forma tenue sobre los paneles."""
-    sello = obtener_sello_saivam_global_html()
-    if sello:
-        st.markdown(sello, unsafe_allow_html=True)
-
-
-def aplicar_estilo():
-    fondo_uri = obtener_data_uri_recurso([
-        ruta_app("fondo_seguridad.jpg"),
-        ruta_app("fondo_seguridad.png"),
-        ruta_app("fondo_sso.jpg"),
-        ruta_app("fondo_sso.png"),
-        ruta_app("fotos", "fondo_seguridad.jpg"),
-        ruta_app("fotos", "fondo_sso.jpg"),
-    ])
-
-    if fondo_uri:
-        fondo_css = (
-            "linear-gradient(90deg, rgba(1,5,4,.92), rgba(3,15,11,.86)), "
-            f"url('{fondo_uri}')"
-        )
     else:
-        fondo_css = (
-            "radial-gradient(circle at 72% 8%, rgba(16,73,54,.34), transparent 34%), "
-            "radial-gradient(circle at 18% 80%, rgba(26,137,96,.20), transparent 36%), "
-            "linear-gradient(135deg, #010403 0%, #050b09 52%, #081712 100%)"
+        filtro_equipo = st.session_state.get("filtro_equipo_menu", "Todos los equipos")
+        filtro_anio = st.session_state.get("filtro_anio_menu", "Todos")
+        filtro_mes = st.session_state.get("filtro_mes_menu", "Todos")
+
+        if filtro_equipo not in equipos_disponibles:
+            filtro_equipo = "Todos los equipos"
+        if filtro_anio not in opciones_anio:
+            filtro_anio = "Todos"
+        if filtro_mes not in opciones_mes:
+            filtro_mes = "Todos"
+
+    return pagina, filtro_equipo, filtro_anio, filtro_mes
+
+
+def crear_donut_costos(costos_item):
+    """Dona más baja para reducir espacio vertical del Dashboard."""
+    fig = go.Figure()
+
+    if costos_item is None or costos_item.empty:
+        fig.update_layout(
+            height=248,
+            paper_bgcolor="rgba(255,255,255,0.82)",
+            plot_bgcolor="rgba(255,255,255,0.82)",
+            annotations=[dict(text="Sin costos", x=0.5, y=0.5, showarrow=False, font_size=15, font_color="#0f172a")],
+            margin=dict(l=6, r=6, t=10, b=12),
+        )
+        return fig
+
+    total = float(costos_item["Costo"].sum())
+
+    fig.add_trace(
+        go.Pie(
+            labels=costos_item["Item"],
+            values=costos_item["Costo"],
+            hole=0.62,
+            sort=False,
+            direction="clockwise",
+            textinfo="percent",
+            texttemplate="%{percent:.1%}",
+            textposition="auto",
+            insidetextorientation="radial",
+            textfont=dict(color="white", size=12, family="Arial Black"),
+            outsidetextfont=dict(color="#0f172a", size=11, family="Arial Black"),
+            hovertemplate="<b>%{label}</b><br>Monto: %{customdata}<br>Participación: %{percent}<extra></extra>",
+            customdata=[pesos(v) for v in costos_item["Costo"]],
+            domain=dict(x=[0.05, 0.95], y=[0.31, 0.91]),
+            showlegend=True,
+        )
+    )
+
+    fig.update_layout(
+        height=248,
+        paper_bgcolor="rgba(255,255,255,0.82)",
+        plot_bgcolor="rgba(255,255,255,0.82)",
+        font=dict(color="#0f172a", size=11),
+        margin=dict(l=6, r=6, t=10, b=50),
+        annotations=[
+            dict(
+                text="Total<br><b>" + pesos(total) + "</b>",
+                x=0.50,
+                y=0.61,
+                xref="paper",
+                yref="paper",
+                font_size=13,
+                font_color="#0f172a",
+                showarrow=False,
+                align="center",
+            )
+        ],
+        legend=dict(
+            title=dict(text="Tipo de costo", font=dict(size=10, color="#0f172a")),
+            orientation="h",
+            x=0.50,
+            y=0.01,
+            xanchor="center",
+            yanchor="bottom",
+            font=dict(size=10, color="#0f172a", family="Arial"),
+            bgcolor="rgba(255,255,255,0.82)",
+            bordercolor="rgba(15,23,42,0.16)",
+            borderwidth=1,
+            itemclick=False,
+            itemdoubleclick=False,
+        ),
+        uniformtext_minsize=8,
+        uniformtext_mode="show",
+    )
+    return fig
+
+
+def _render_item_proxima_dashboard(fila):
+    """Devuelve una fila HTML limpia para Próximas Mantenciones del Dashboard.
+
+    Ajuste V6.8 solicitado:
+    - No muestra columna ni texto "Próxima".
+    - Debajo del nombre del equipo muestra la lectura actual de Km/Horómetro.
+    - El badge naranjo/rojo queda dentro del mismo cuadro.
+    """
+    equipo = escape_html(fila.get("Equipo", "Sin equipo"))
+
+    unidad = unidad_control_texto(fila.get("Unidad_Control", ""))
+    actual_num = limpiar_numero(fila.get("Km_Horometro_Actual", 0))
+    saldo_num = limpiar_numero(fila.get("Saldo_Restante", 0))
+
+    actual_txt = f"{numero(actual_num)} {unidad}" if actual_num > 0 else "Sin dato"
+    saldo_txt = formatear_saldo_control(saldo_num, unidad)
+
+    if saldo_num < 0:
+        clase_badge = "badge-days badge-overdue"
+        badge_txt = f"Vencida {saldo_txt}"
+    elif saldo_num == 0:
+        clase_badge = "badge-days badge-danger"
+        badge_txt = f"Faltan {saldo_txt}"
+    else:
+        clase_badge = "badge-days badge-warning"
+        badge_txt = f"Faltan {saldo_txt}"
+
+    return f"""
+<div class="next-item next-row-v68">
+    <div class="next-info-v68">
+        <div class="next-equipo-v68">{equipo}</div>
+        <div class="next-actual-v68"><span>Km/Horómetro actual:</span> {escape_html(actual_txt)}</div>
+    </div>
+    <div class="{clase_badge} next-badge-v68">{escape_html(badge_txt)}</div>
+</div>
+"""
+
+def pagina_dashboard(equipos_f, mant_f, gastos_f, combustible_f, proximas_originales, filtro_equipo):
+    """Dashboard Ejecutivo compacto y ordenado."""
+    gastos_sin_combustible = gastos_no_combustible(gastos_f)
+
+    costo_mantenciones = float(mant_f["Costo_CLP"].sum()) if "Costo_CLP" in mant_f.columns else 0.0
+    costo_gastos = float(gastos_sin_combustible["Costo_CLP"].sum()) if "Costo_CLP" in gastos_sin_combustible.columns else 0.0
+    costo_total = costo_mantenciones + costo_gastos
+
+    mant_realizadas = len(mant_f)
+    repuestos_utilizados = len(gastos_sin_combustible)
+    equipos_registrados = len(equipos_f)
+
+    if "Proxima_Mantencion" not in proximas_originales.columns:
+        proximas_originales = pd.DataFrame(columns=[
+            "Equipo", "Categoria", "Tipo_Mantencion", "Proxima_Mantencion",
+            "Km_Horometro_Actual", "Unidad_Control", "Costo_CLP"
+        ])
+
+    mant_proximas = proximas_originales.copy()
+    if "Proxima_Mantencion" in mant_proximas.columns:
+        mant_proximas["Proxima_Mantencion"] = mant_proximas["Proxima_Mantencion"].apply(limpiar_numero)
+        mant_proximas = mant_proximas[mant_proximas["Proxima_Mantencion"] > 0].copy()
+
+    if filtro_equipo != "Todos los equipos" and "Equipo" in mant_proximas.columns:
+        mant_proximas = mant_proximas[mant_proximas["Equipo"] == filtro_equipo]
+
+    mant_proximas = resumen_proximas_por_equipo(mant_proximas) if not mant_proximas.empty else mant_proximas
+
+    if not mant_proximas.empty:
+        proxima_fila = mant_proximas.iloc[0]
+        proxima_texto = str(proxima_fila.get("Equipo", "Sin equipo")).strip() or "Sin equipo"
+        proxima_sub = f"Próx.: {proxima_fila.get('Proxima_Texto', 'Sin dato')} | {proxima_fila.get('Texto_Estado', 'Sin análisis')}"
+    else:
+        proxima_texto = "Sin registro"
+        proxima_sub = "No programada"
+
+    k1, k2, k3, k4, k5 = st.columns(5)
+    with k1:
+        kpi_card("🛠️", "Mantenciones", f"{mant_realizadas}", "Registros del período", "#dbeafe")
+    with k2:
+        kpi_card("💲", "Monto Total", pesos(costo_total), "Costos del período", "#dcfce7")
+    with k3:
+        kpi_card("🧰", "Gastos Adic.", f"{repuestos_utilizados}", "Repuestos, mantenciones y administrativos", "#f3e8ff")
+    with k4:
+        kpi_card("📅", "Próxima Mantención", proxima_texto, proxima_sub, "#ffedd5")
+    with k5:
+        kpi_card("🚚", "Equipos Registrados", f"{equipos_registrados}", "Total equipos", "#ccfbf1")
+
+    c1, c2 = st.columns([1.60, 1.0])
+
+    with c1:
+        st.markdown('<div class="panel-title">Histórico de Mantenciones</div>', unsafe_allow_html=True)
+        historico = mant_f.copy()
+        if "Tipo_Mantencion" in historico.columns:
+            historico["Mantencion"] = historico["Tipo_Mantencion"].apply(normalizar_tipo_mantencion)
+
+        if not historico.empty:
+            historico = historico.sort_values("Fecha", ascending=False).head(6)
+            columnas_base = ["Fecha", "Equipo", "Mantencion", "Descripcion", "Costo_CLP", "Estado_Mantencion"]
+            columnas_base = [c for c in columnas_base if c in historico.columns]
+            mostrar = historico[columnas_base].copy()
+            if "Fecha" in mostrar.columns:
+                mostrar["Fecha"] = mostrar["Fecha"].apply(fecha_texto)
+            if "Costo_CLP" in mostrar.columns:
+                mostrar["Costo_CLP"] = mostrar["Costo_CLP"].apply(pesos)
+            mostrar = mostrar.rename(columns={
+                "Mantencion": "Tipo",
+                "Descripcion": "Descripción",
+                "Costo_CLP": "Monto",
+                "Estado_Mantencion": "Estado",
+            })
+            st.markdown('<div class="dashboard-compact-table">', unsafe_allow_html=True)
+            mostrar_tabla_clara(mostrar, height=210)
+            st.markdown('</div>', unsafe_allow_html=True)
+        else:
+            st.info("No existen mantenciones registradas para el filtro aplicado.")
+
+    with c2:
+        st.markdown('<div class="dashboard-costos-spacer"></div>', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title chart-title dashboard-costos-title">Distribución de Costos</div>', unsafe_allow_html=True)
+        costos_item = construir_consolidado_costos(mant_f, gastos_f)
+        st.plotly_chart(crear_donut_costos(costos_item), use_container_width=True)
+
+    c3, c4, c5 = st.columns([1.05, 1.36, 1.25])
+
+    with c3:
+        st.markdown('<div class="panel-title">Gastos Adicionales</div>', unsafe_allow_html=True)
+        repuestos = gastos_sin_combustible.copy()
+        if not repuestos.empty:
+            repuestos = repuestos.sort_values("Fecha", ascending=False).head(5)
+            columnas_repuestos = ["Fecha", "Equipo", "Tipo_Gasto", "Descripcion", "Costo_CLP"]
+            columnas_repuestos = [c for c in columnas_repuestos if c in repuestos.columns]
+            mostrar = repuestos[columnas_repuestos].copy()
+            if "Fecha" in mostrar.columns:
+                mostrar["Fecha"] = mostrar["Fecha"].apply(fecha_texto)
+            if "Costo_CLP" in mostrar.columns:
+                mostrar["Costo_CLP"] = mostrar["Costo_CLP"].apply(pesos)
+            mostrar = mostrar.rename(columns={
+                "Tipo_Gasto": "Tipo",
+                "Descripcion": "Detalle",
+                "Costo_CLP": "Monto",
+            })
+            st.markdown('<div class="dashboard-compact-table">', unsafe_allow_html=True)
+            mostrar_tabla_clara(mostrar, height=170)
+            st.markdown('</div>', unsafe_allow_html=True)
+        else:
+            st.info("No existen gastos adicionales o administrativos registrados.")
+
+    with c4:
+        if not mant_proximas.empty:
+            filas_proximas_html = "".join(
+                _render_item_proxima_dashboard(fila)
+                for _, fila in mant_proximas.head(7).iterrows()
+            )
+        else:
+            filas_proximas_html = '<div class="proximas-empty-v68">No existen próximas mantenciones registradas.</div>'
+
+        html_proximas = (
+            '<div class="dashboard-proximas dashboard-proximas-v68">'
+            '<div class="panel-title proximas-title-v68">Próximas Mantenciones</div>'
+            '<div class="next-list-v68">'
+            + filas_proximas_html
+            + '</div></div>'
+        )
+        st.markdown(html_proximas, unsafe_allow_html=True)
+
+    with c5:
+        st.markdown('<div class="panel-title">Evolución de Costos</div>', unsafe_allow_html=True)
+
+        mant_mes = (
+            mant_f.groupby(["Año", "Mes_Numero", "Periodo"], as_index=False)["Costo_CLP"].sum()
+            .rename(columns={"Costo_CLP": "Mantenciones"})
+        ) if not mant_f.empty and "Costo_CLP" in mant_f.columns else pd.DataFrame(columns=["Año", "Mes_Numero", "Periodo", "Mantenciones"])
+
+        gasto_mes = (
+            gastos_sin_combustible.groupby(["Año", "Mes_Numero", "Periodo"], as_index=False)["Costo_CLP"].sum()
+            .rename(columns={"Costo_CLP": "Gastos"})
+        ) if not gastos_sin_combustible.empty and "Costo_CLP" in gastos_sin_combustible.columns else pd.DataFrame(columns=["Año", "Mes_Numero", "Periodo", "Gastos"])
+
+        comb_mes = (
+            combustible_f.groupby(["Año", "Mes_Numero", "Periodo"], as_index=False)["Costo_Total"].sum()
+            .rename(columns={"Costo_Total": "Combustible"})
+        ) if not combustible_f.empty and "Costo_Total" in combustible_f.columns else pd.DataFrame(columns=["Año", "Mes_Numero", "Periodo", "Combustible"])
+
+        costos_mes = (
+            mant_mes
+            .merge(gasto_mes, on=["Año", "Mes_Numero", "Periodo"], how="outer")
+            .merge(comb_mes, on=["Año", "Mes_Numero", "Periodo"], how="outer")
+            .fillna(0)
         )
 
-    css = r"""
+        if not costos_mes.empty:
+            costos_mes = costos_mes.sort_values(["Año", "Mes_Numero"])
+            costos_mes["Monto Acumulado"] = (
+                costos_mes["Mantenciones"] + costos_mes["Gastos"] + costos_mes["Combustible"]
+            ).cumsum()
+
+            fig_linea = px.line(
+                costos_mes,
+                x="Periodo",
+                y="Monto Acumulado",
+                markers=True,
+                template="plotly_white",
+            )
+            fig_linea.update_traces(
+                line=dict(width=3, color="#2563eb"),
+                marker=dict(size=7),
+                name="",
+                showlegend=False,
+                customdata=costos_mes["Monto Acumulado"].apply(pesos),
+                hovertemplate="<b>%{x}</b><br>Monto acumulado: %{customdata}<extra></extra>",
+            )
+            fig_linea.update_layout(title_text="", showlegend=False, legend_title_text="")
+            st.plotly_chart(aplicar_formato_grafico(fig_linea, 190), use_container_width=True)
+        else:
+            st.info("Sin costos para graficar.")
+
+    st.markdown('<div class="panel-title">Estado de los Equipos</div>', unsafe_allow_html=True)
+
+    if equipos_f.empty:
+        st.info("No existen equipos registrados.")
+    else:
+        cantidad_columnas = min(len(equipos_f), 7)
+        if cantidad_columnas <= 0:
+            cantidad_columnas = 1
+        columnas = st.columns(cantidad_columnas)
+        for columna, (_, fila) in zip(columnas, equipos_f.head(7).iterrows()):
+            with columna:
+                tarjeta_equipo(fila)
+
+
+aplicar_ajustes_finales_ui()
+
+
+try:
+    mostrar_panel()
+
+except FileNotFoundError:
+    st.error("No se pudo cargar la información desde Google Sheets.")
+    st.info(
+        "Revisa estos puntos: 1) el Google Sheets debe estar compartido como "
+        "'Cualquier persona con el enlace - Lector'; 2) las pestañas deben llamarse "
+        "EQUIPOS, MANTENCIONES, GASTOS_ADICIONALES, CHECKLIST, COMBUSTIBLE y DOCUMENTOS; "
+        "3) la hoja EQUIPOS debe tener datos."
+    )
+    st.code(GOOGLE_SHEET_URL)
+
+except Exception as error:
+    st.error("Ocurrió un error al cargar o procesar la información.")
+    st.exception(error)
+
+# =========================================================
+# AJUSTE FINAL V5.1: VISTA COMPLETA AL 100% DEL NAVEGADOR
+# - Menú más angosto.
+# - Contenido principal sin ancho mínimo forzado.
+# - Evita que el título, KPIs, tablas y gráficos queden cortados.
+# =========================================================
+st.markdown(
+    """
 <style>
-header[data-testid="stHeader"],
-[data-testid="stToolbar"],
-[data-testid="stDecoration"],
-[data-testid="stStatusWidget"],
-[data-testid="stDeployButton"],
-[data-testid="collapsedControl"],
-[data-testid="stSidebarCollapsedControl"],
-[data-testid="stSidebarCollapseButton"],
-[data-testid="stSidebarHeader"],
-button[data-testid="stSidebarCollapseButton"],
-button[aria-label="Collapse sidebar"],
-button[aria-label="Expand sidebar"],
-button[aria-label="Close sidebar"],
-button[aria-label="Open sidebar"],
-#MainMenu,
-footer {
-    display: none !important;
-    visibility: hidden !important;
-    height: 0 !important;
-}
-
-html, body, .stApp, [data-testid="stAppViewContainer"] {
-    color: #F4FFF9 !important;
-    background-color: #010403 !important;
-}
-
 :root {
-    --sidebar-fixed-width: 250px;
+    --menu-panel-width: 280px !important;
+    --menu-inner-width: 248px !important;
+    --menu-panel-width-final: 280px !important;
+    --menu-inner-width-final: 248px !important;
+    --content-padding-x: 18px !important;
 }
 
-.stApp {
-    background-image: __FONDO__ !important;
-    background-size: cover !important;
-    background-position: center !important;
-    background-attachment: fixed !important;
-}
-
-.stApp::before {
-    content: "";
-    position: fixed;
-    inset: 0;
-    pointer-events: none;
-    background:
-        linear-gradient(110deg, rgba(0,0,0,.34), rgba(0,0,0,.08) 52%),
-        repeating-linear-gradient(90deg, rgba(110,231,183,.035) 0 1px, transparent 1px 92px);
-    z-index: 0;
-}
-
-/*
-El contenedor principal conserva siempre dos columnas reales: menú y contenido.
-El menú permanece fijo visualmente, pero continúa ocupando su espacio dentro del
-layout. De esta forma el contenido nunca queda debajo del menú al cambiar el
-ancho de la ventana o el nivel de zoom.
-*/
-[data-testid="stAppViewContainer"] {
-    display: flex !important;
-    flex-direction: row !important;
-    align-items: stretch !important;
-    width: 100% !important;
-    min-width: 0 !important;
-    overflow-x: hidden !important;
-}
-
+/* Menú izquierdo más compacto */
 section[data-testid="stSidebar"] {
-    position: sticky !important;
-    top: 0 !important;
-    left: auto !important;
-    bottom: auto !important;
-    align-self: flex-start !important;
-    flex: 0 0 var(--sidebar-fixed-width) !important;
-    transform: none !important;
-    visibility: visible !important;
-    width: var(--sidebar-fixed-width) !important;
-    min-width: var(--sidebar-fixed-width) !important;
-    max-width: var(--sidebar-fixed-width) !important;
-    height: 100vh !important;
-    z-index: 9999 !important;
-    background: linear-gradient(180deg, #043D31 0%, #075844 55%, #064735 100%) !important;
-    border-right: 1px solid rgba(134,239,172,.28) !important;
-    box-shadow: 10px 0 28px rgba(4,63,49,.24) !important;
-    overflow: hidden !important;
-    transition: none !important;
+    width: var(--menu-panel-width) !important;
+    min-width: var(--menu-panel-width) !important;
+    max-width: var(--menu-panel-width) !important;
+    overflow-x: hidden !important;
 }
 
-/* Compatibilidad con distintas versiones de Streamlit. */
-[data-testid="stAppViewContainer"] > .main,
-[data-testid="stAppViewContainer"] > section[data-testid="stMain"] {
-    position: relative !important;
-    z-index: 1 !important;
-    flex: 1 1 auto !important;
-    width: auto !important;
-    max-width: none !important;
-    min-width: 0 !important;
-    margin-left: 0 !important;
-    transform: none !important;
+section[data-testid="stSidebar"] > div,
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+    width: var(--menu-panel-width) !important;
+    min-width: var(--menu-panel-width) !important;
+    max-width: var(--menu-panel-width) !important;
+    padding: 8px 10px 12px 10px !important;
+    box-sizing: border-box !important;
     overflow-x: hidden !important;
+}
+
+section[data-testid="stSidebar"] .menu-panel-content,
+section[data-testid="stSidebar"] .menu-brand,
+section[data-testid="stSidebar"] .menu-line,
+section[data-testid="stSidebar"] .menu-footer-box,
+section[data-testid="stSidebar"] div[data-testid="stButton"],
+section[data-testid="stSidebar"] div[data-testid="stSelectbox"],
+section[data-testid="stSidebar"] [data-baseweb="select"],
+section[data-testid="stSidebar"] [data-baseweb="select"] > div,
+section[data-testid="stSidebar"] .menu-active-item {
+    width: var(--menu-inner-width) !important;
+    min-width: var(--menu-inner-width) !important;
+    max-width: var(--menu-inner-width) !important;
+    box-sizing: border-box !important;
+}
+
+section[data-testid="stSidebar"] div[data-testid="stButton"] button,
+section[data-testid="stSidebar"] .menu-active-item {
+    width: var(--menu-inner-width) !important;
+    min-width: var(--menu-inner-width) !important;
+    max-width: var(--menu-inner-width) !important;
+    min-height: 42px !important;
+    height: 42px !important;
+    padding: 8px 10px !important;
+    font-size: 13.2px !important;
+    line-height: 1.05 !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+}
+
+section[data-testid="stSidebar"] .menu-title {
+    font-size: 12.2px !important;
+    line-height: 1.1 !important;
+}
+
+section[data-testid="stSidebar"] .menu-subtitle {
+    font-size: 10.4px !important;
+    line-height: 1.1 !important;
+}
+
+section[data-testid="stSidebar"] .menu-icon-img {
+    width: 42px !important;
+    height: 42px !important;
+    min-width: 42px !important;
+    max-width: 42px !important;
+}
+
+/* Contenido principal: parte justo después del menú y usa todo el ancho disponible */
+[data-testid="stAppViewContainer"] > .main,
+div[data-testid="stMain"],
+section.main,
+main {
+    margin-left: var(--menu-panel-width) !important;
+    width: calc(100vw - var(--menu-panel-width)) !important;
+    max-width: calc(100vw - var(--menu-panel-width)) !important;
+    min-width: 0 !important;
+    overflow-x: hidden !important;
+    box-sizing: border-box !important;
 }
 
 .main .block-container,
-[data-testid="stMain"] .block-container,
-[data-testid="stMainBlockContainer"] {
-    box-sizing: border-box !important;
-    padding-top: 1rem !important;
-    padding-left: 1.6rem !important;
-    padding-right: 1.45rem !important;
-    padding-bottom: 1rem !important;
+.block-container,
+div[data-testid="stMainBlockContainer"] {
     width: 100% !important;
     max-width: 100% !important;
     min-width: 0 !important;
-    margin: 0 !important;
-}
-
-section[data-testid="stSidebar"] > div {
-    height: 100vh !important;
-    box-sizing: border-box !important;
-    overflow-y: auto !important;
-    overflow-x: hidden !important;
-    scrollbar-width: thin !important;
-    scrollbar-color: rgba(167,243,208,.52) transparent !important;
-    background: transparent !important;
-    padding: 0 !important;
-}
-
-
-/* Compactación real del contenido interno del menú lateral. */
-section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {
-    width: 100% !important;
-    max-width: 100% !important;
-    padding: 0 !important;
-    margin: 0 !important;
-    box-sizing: border-box !important;
-}
-
-section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
-    width: 100% !important;
-    max-width: 100% !important;
-    padding: 8px 5px 10px 5px !important;
-    margin: 0 !important;
-    box-sizing: border-box !important;
-}
-
-section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] > div,
-section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] [data-testid="stVerticalBlock"],
-section[data-testid="stSidebar"] [data-testid="stElementContainer"] {
-    width: 100% !important;
-    max-width: 100% !important;
-    box-sizing: border-box !important;
-}
-
-section[data-testid="stSidebar"] div[role="radiogroup"] {
-    padding-right: 0 !important;
+    padding-left: var(--content-padding-x) !important;
+    padding-right: var(--content-padding-x) !important;
+    padding-top: 0px !important;
+    margin-left: 0 !important;
     margin-right: 0 !important;
-}
-
-section[data-testid="stSidebar"] > div::-webkit-scrollbar {
-    width: 6px;
-}
-
-section[data-testid="stSidebar"] > div::-webkit-scrollbar-track {
-    background: transparent;
-}
-
-section[data-testid="stSidebar"] > div::-webkit-scrollbar-thumb {
-    background: rgba(167,243,208,.46);
-    border-radius: 999px;
-}
-
-section[data-testid="stSidebar"] * {
-    color: #ffffff !important;
-}
-
-section[data-testid="stSidebar"] hr {
-    border-color: rgba(167,243,208,.25) !important;
-    margin: 9px 0 !important;
-}
-
-.menu-brand {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 2px 2px 9px 2px;
-    margin-bottom: 6px;
-    border-bottom: 1px solid rgba(167,243,208,.24);
-}
-
-.menu-logo-shell {
-    width: 44px;
-    height: 44px;
-    min-width: 44px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: linear-gradient(145deg, #ffffff 0%, #d7dee7 55%, #7b8796 100%);
-    border: 1px solid rgba(255,255,255,.72);
-    box-shadow: 0 8px 18px rgba(0,0,0,.34), inset 0 0 0 3px rgba(15,23,42,.16);
-    overflow: hidden;
-}
-
-.menu-logo-shell .brand-logo-img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    padding: 0;
-    border-radius: 50%;
-}
-
-.brand-fallback {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-}
-
-.brand-mark {
-    width: 42px;
-    height: 27px;
-    border-radius: 50%;
-    background: #ffd500;
-    color: #111827 !important;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    font-weight: 1000;
-    font-style: italic;
-    border: 5px solid #111827;
-    transform: rotate(-12deg);
-}
-
-.brand-name {
-    color: #111827 !important;
-    font-size: 21px;
-    font-weight: 1000;
-    letter-spacing: 2px;
-}
-
-.menu-title {
-    color: #ffffff !important;
-    font-weight: 1000;
-    font-size: 12.4px;
-    line-height: 1.22;
-    letter-spacing: .25px;
-    text-transform: uppercase;
-}
-
-.menu-subtitle {
-    color: #B7F7D4 !important;
-    font-size: 9.9px;
-    margin-top: 4px;
-    font-weight: 900;
-    letter-spacing: .3px;
-}
-
-section[data-testid="stSidebar"] div[role="radiogroup"] {
-    display: flex !important;
-    flex-direction: column !important;
-    align-items: stretch !important;
-    width: 100% !important;
-    gap: 0 !important;
-}
-
-/* Todos los ítems tienen el mismo ancho y una altura compacta. */
-section[data-testid="stSidebar"] div[role="radiogroup"] label {
-    display: flex !important;
-    align-items: center !important;
-    width: 100% !important;
-    min-width: 100% !important;
-    max-width: 100% !important;
-    min-height: 42px !important;
+    overflow-x: hidden !important;
     box-sizing: border-box !important;
-    border-radius: 13px !important;
-    padding: 7px 7px !important;
-    margin: 0 0 5px 0 !important;
-    border: 1px solid rgba(133,213,175,.48) !important;
-    background: rgba(4,61,49,.86) !important;
-    box-shadow: inset 0 0 0 1px rgba(255,255,255,.015) !important;
-    transition: all .18s ease !important;
 }
 
-section[data-testid="stSidebar"] div[role="radiogroup"] label:hover {
-    transform: translateX(2px);
-    background: rgba(10,104,78,.94) !important;
-    border-color: rgba(110,231,183,.78) !important;
+/* Elimina anchos mínimos antiguos que provocaban corte horizontal */
+[data-testid="stHorizontalBlock"],
+[data-testid="stVerticalBlock"],
+[data-testid="stElementContainer"],
+[data-testid="column"] {
+    min-width: 0 !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
 }
 
-section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) {
-    background: linear-gradient(100deg, #19A96B 0%, #27C97F 100%) !important;
-    border: 1px solid rgba(219,234,254,.96) !important;
-    box-shadow: 0 9px 21px rgba(16,185,129,.28), inset 0 0 18px rgba(255,255,255,.10) !important;
+[data-testid="stHorizontalBlock"] {
+    gap: 0.75rem !important;
 }
 
-section[data-testid="stSidebar"] div[role="radiogroup"] label > div:first-child {
-    display: none !important;
-}
-
-section[data-testid="stSidebar"] div[role="radiogroup"] p {
-    width: 100% !important;
-    margin: 0 !important;
-    color: #ffffff !important;
-    font-weight: 900 !important;
-    font-size: 12.2px !important;
-    line-height: 1.2 !important;
-    white-space: nowrap !important;
+/* Título y logo ajustados para no salirse al 100% */
+.title-main {
+    font-size: clamp(28px, 2.15vw, 38px) !important;
+    line-height: 1.05 !important;
+    white-space: normal !important;
     overflow: visible !important;
     text-overflow: clip !important;
-    text-shadow: 0 1px 1px rgba(0,0,0,.42);
+    max-width: 100% !important;
+    margin-left: 0 !important;
 }
 
-section[data-testid="stSidebar"] label,
-section[data-testid="stSidebar"] p,
-section[data-testid="stSidebar"] span {
-    font-weight: 800 !important;
+.header-logo-box img {
+    width: 132px !important;
+    max-width: 132px !important;
 }
 
-section[data-testid="stSidebar"] [data-baseweb="select"] > div {
-    min-height: 38px !important;
-    background: #ffffff !important;
-    border-radius: 10px !important;
-    border: 1px solid rgba(255,255,255,.6) !important;
-}
-
-section[data-testid="stSidebar"] [data-baseweb="select"] * {
-    color: #111827 !important;
-    font-weight: 800 !important;
-}
-
-.sidebar-filter-title {
-    color: #A7F3D0 !important;
-    font-size: 10px;
-    font-weight: 950;
-    text-transform: uppercase;
-    letter-spacing: .8px;
-    margin-bottom: 8px;
-}
-
-.menu-footer-box {
-    border: 1px solid rgba(133,213,175,.44);
-    background: rgba(4,71,54,.90);
-    border-radius: 15px;
-    padding: 10px 11px;
-    margin-top: 10px;
-    box-shadow: 0 10px 20px rgba(0,0,0,.22);
-}
-
-.menu-info {
-    color: #ffffff !important;
-    font-size: 9.9px;
-    line-height: 1.5;
-    font-weight: 750;
-}
-
-.menu-info b {
-    color: #A7F3D0 !important;
-}
-
-.app-topbar {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 18px;
-    margin: 0 0 10px 0;
-}
-
-.title-main {
-    font-size: clamp(20px, 1.7vw, 32px);
-    font-weight: 1000;
-    color: #D1FAE5;
-    margin: 1px 0 2px 0;
-    line-height: 1.04;
-    letter-spacing: -1.2px;
-    white-space: nowrap;
-    text-shadow: 0 2px 10px rgba(0,0,0,.78);
-}
-
-.subtitle-main {
-    color: #B7E4D0;
-    font-size: 14px;
-    font-weight: 760;
-    margin-top: 7px;
-    max-width: 950px;
-}
-
-.main-logo-card {
-    flex: 0 0 auto;
-    min-width: 0;
-    width: auto;
-    height: auto;
-    padding: 0;
-    margin: 0;
-    background: transparent;
-    border: 0;
-    border-radius: 0;
-    box-shadow: none;
-    display: flex;
-    align-items: flex-start;
-    justify-content: flex-end;
-    overflow: visible;
-}
-
-.main-logo-card .brand-logo-img {
-    display: block;
-    width: 180px;
-    max-width: 100%;
-    height: auto;
-    max-height: 58px;
-    padding: 0;
-    margin: 0;
-    border: 0;
-    border-radius: 0;
-    background: transparent;
-    box-shadow: none;
-    object-fit: contain;
-}
-
-.main-logo-card .brand-fallback .brand-mark {
-    width: 54px;
-    height: 31px;
-}
-
-.main-logo-card .brand-name {
-    font-size: 25px;
-}
-
+/* Tarjetas KPI más compactas */
 .kpi-card {
-    position: relative;
-    overflow: hidden;
-    background: linear-gradient(145deg, rgba(3,10,8,.93), rgba(8,31,24,.84));
-    border: 1px solid rgba(52,211,153,.36);
-    border-radius: 17px;
-    padding: 18px 20px 16px 20px;
-    min-height: 190px;
-    box-shadow: 0 12px 30px rgba(0,0,0,.34), inset 0 1px 0 rgba(110,231,183,.11);
-    backdrop-filter: blur(11px);
-    -webkit-backdrop-filter: blur(11px);
-}
-
-.kpi-card::after {
-    content: "";
-    position: absolute;
-    right: -34px;
-    bottom: -50px;
-    width: 120px;
-    height: 120px;
-    border-radius: 50%;
-    background: rgba(52,211,153,.07);
+    min-width: 0 !important;
+    width: 100% !important;
+    padding: 16px !important;
+    min-height: 118px !important;
 }
 
 .kpi-icon {
-    width: 58px;
-    height: 58px;
-    border-radius: 18px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 28px;
-    margin-bottom: 13px;
-    box-shadow: inset 0 0 0 1px rgba(255,255,255,.35);
+    width: 46px !important;
+    height: 46px !important;
+    border-radius: 15px !important;
+    font-size: 22px !important;
+    margin-bottom: 9px !important;
 }
 
-.kpi-icon.azul { background: rgba(16,185,129,.18); }
-.kpi-icon.verde { background: rgba(34,197,94,.18); }
-.kpi-icon.morado { background: rgba(5,150,105,.17); }
-.kpi-icon.ambar { background: rgba(132,204,22,.18); }
-.kpi-icon.rojo { background: rgba(45,212,191,.18); }
-.kpi-icon.celeste { background: rgba(20,184,166,.18); }
-
 .kpi-title {
-    font-size: 12.8px;
-    color: #B7E4D0;
-    font-weight: 930;
+    font-size: 12px !important;
 }
 
 .kpi-value {
-    font-size: 25px;
-    font-weight: 1000;
-    color: #FFFFFF;
-    margin-top: 8px;
-    line-height: 1.1;
+    font-size: clamp(20px, 1.55vw, 25px) !important;
+    line-height: 1.05 !important;
 }
 
 .kpi-sub {
-    font-size: 12px;
-    color: #9FCBB9;
-    margin-top: 9px;
-    line-height: 1.32;
+    font-size: 11px !important;
+    line-height: 1.25 !important;
+}
+
+/* Tablas y gráficos contenidos dentro de la pantalla */
+[data-testid="stDataFrame"],
+[data-testid="stTable"],
+[data-testid="stPlotlyChart"],
+.js-plotly-plot,
+.plot-container,
+.svg-container {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    overflow-x: hidden !important;
+    box-sizing: border-box !important;
+}
+
+/* Sello de agua alineado al nuevo ancho del menú */
+.saivam-marca-principal {
+    left: var(--menu-panel-width) !important;
+    width: calc(100vw - var(--menu-panel-width)) !important;
+}
+
+/* Modo pantallas más pequeñas: mantiene todo visible sin cortar el título */
+@media (max-width: 1400px) {
+    :root {
+        --menu-panel-width: 260px !important;
+        --menu-inner-width: 230px !important;
+        --content-padding-x: 14px !important;
+    }
+
+    section[data-testid="stSidebar"] {
+        width: var(--menu-panel-width) !important;
+        min-width: var(--menu-panel-width) !important;
+        max-width: var(--menu-panel-width) !important;
+    }
+
+    section[data-testid="stSidebar"] > div,
+    section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+        width: var(--menu-panel-width) !important;
+        min-width: var(--menu-panel-width) !important;
+        max-width: var(--menu-panel-width) !important;
+    }
+
+    section[data-testid="stSidebar"] .menu-panel-content,
+    section[data-testid="stSidebar"] .menu-brand,
+    section[data-testid="stSidebar"] .menu-line,
+    section[data-testid="stSidebar"] .menu-footer-box,
+    section[data-testid="stSidebar"] div[data-testid="stButton"],
+    section[data-testid="stSidebar"] div[data-testid="stSelectbox"],
+    section[data-testid="stSidebar"] [data-baseweb="select"],
+    section[data-testid="stSidebar"] [data-baseweb="select"] > div,
+    section[data-testid="stSidebar"] .menu-active-item,
+    section[data-testid="stSidebar"] div[data-testid="stButton"] button {
+        width: var(--menu-inner-width) !important;
+        min-width: var(--menu-inner-width) !important;
+        max-width: var(--menu-inner-width) !important;
+    }
+
+    .title-main {
+        font-size: clamp(25px, 2.0vw, 32px) !important;
+    }
+
+    .header-logo-box img {
+        width: 112px !important;
+        max-width: 112px !important;
+    }
+
+    .kpi-card {
+        padding: 13px !important;
+        min-height: 108px !important;
+    }
+}
+</style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+# =========================================================
+# AJUSTE FINAL DASHBOARD EJECUTIVO 100%
+# =========================================================
+st.markdown(
+    """
+<style>
+/* Mantiene visible el Dashboard Ejecutivo a zoom 100% */
+:root {
+    --menu-panel-width: 250px !important;
+    --menu-inner-width: 218px !important;
+    --content-padding-x: 14px !important;
+}
+section[data-testid="stSidebar"] {
+    width: var(--menu-panel-width) !important;
+    min-width: var(--menu-panel-width) !important;
+    max-width: var(--menu-panel-width) !important;
+}
+section[data-testid="stSidebar"] > div,
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+    width: var(--menu-panel-width) !important;
+    min-width: var(--menu-panel-width) !important;
+    max-width: var(--menu-panel-width) !important;
+    padding: 10px 10px 14px 10px !important;
+}
+section[data-testid="stSidebar"] .menu-panel-content,
+section[data-testid="stSidebar"] .menu-brand,
+section[data-testid="stSidebar"] .menu-line,
+section[data-testid="stSidebar"] .menu-footer-box,
+section[data-testid="stSidebar"] div[data-testid="stButton"],
+section[data-testid="stSidebar"] div[data-testid="stSelectbox"],
+section[data-testid="stSidebar"] [data-baseweb="select"],
+section[data-testid="stSidebar"] [data-baseweb="select"] > div,
+section[data-testid="stSidebar"] .menu-active-item,
+section[data-testid="stSidebar"] div[data-testid="stButton"] button {
+    width: var(--menu-inner-width) !important;
+    min-width: var(--menu-inner-width) !important;
+    max-width: var(--menu-inner-width) !important;
+}
+[data-testid="stAppViewContainer"] > .main,
+section.main,
+main {
+    margin-left: var(--menu-panel-width) !important;
+    width: calc(100vw - var(--menu-panel-width)) !important;
+    max-width: calc(100vw - var(--menu-panel-width)) !important;
+}
+.main .block-container,
+.block-container {
+    padding-top: 0.15rem !important;
+    padding-left: var(--content-padding-x) !important;
+    padding-right: var(--content-padding-x) !important;
+    padding-bottom: 1rem !important;
+    max-width: none !important;
+    min-width: 0 !important;
+}
+.main-fixed-header {
+    min-height: 58px !important;
+    margin-bottom: 8px !important;
+}
+.main-fixed-title,
+.title-main {
+    font-size: clamp(28px, 2.2vw, 38px) !important;
+    line-height: 1.05 !important;
+    white-space: normal !important;
+}
+.main-fixed-logo img,
+.header-logo-box img {
+    width: 125px !important;
+    max-width: 125px !important;
+}
+.main-fixed-header-spacer,
+.header-separador {
+    height: 6px !important;
+    min-height: 6px !important;
+}
+.kpi-card {
+    min-height: 104px !important;
+    padding: 12px 14px !important;
+    border-radius: 16px !important;
+}
+.kpi-icon {
+    width: 40px !important;
+    height: 40px !important;
+    font-size: 20px !important;
+    margin-bottom: 7px !important;
+}
+.kpi-title { font-size: 11.2px !important; }
+.kpi-value { font-size: clamp(19px, 1.35vw, 24px) !important; }
+.kpi-sub { font-size: 10.5px !important; line-height: 1.2 !important; }
+.panel-title {
+    font-size: 17px !important;
+    margin-top: 12px !important;
+    margin-bottom: 7px !important;
+}
+[data-testid="stHorizontalBlock"] {
+    gap: 0.65rem !important;
+    align-items: stretch !important;
+}
+.next-item {
+    min-height: 34px !important;
+    padding: 4px 0 !important;
+}
+.next-title { font-size: 11px !important; }
+.next-sub { font-size: 9.6px !important; }
+.badge-days { font-size: 9px !important; padding: 4px 6px !important; }
+.equipo-card {
+    padding: 10px !important;
+    border-radius: 16px !important;
+}
+.equipo-img {
+    height: 88px !important;
+    min-height: 88px !important;
+}
+.equipo-nombre { font-size: 15px !important; }
+.equipo-sub { font-size: 11px !important; }
+/* Refuerzo de montos con $ a la derecha en tablas HTML */
+td, th { white-space: normal !important; }
+</style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+# =========================================================
+# AJUSTE FINAL V5.7: SUBIR TODAS LAS PÁGINAS PRINCIPALES
+# - Elimina espacio superior vacío en Dashboard, Mantenciones, Costos, Alertas, etc.
+# - Mantiene título y logo más arriba para aprovechar pantalla al 100%.
+# =========================================================
+st.markdown(
+    """
+<style>
+/* Quita márgenes/paddings superiores acumulados de Streamlit */
+html, body, .stApp,
+[data-testid="stAppViewContainer"],
+[data-testid="stAppViewContainer"] > .main,
+div[data-testid="stMain"],
+section.main,
+main {
+    padding-top: 0px !important;
+    margin-top: 0px !important;
+}
+
+.main .block-container,
+.block-container,
+div[data-testid="stMainBlockContainer"],
+section.main > div {
+    padding-top: 0px !important;
+    margin-top: -92px !important;
+    padding-bottom: 0.8rem !important;
+}
+
+/* Encabezado común de todas las páginas */
+.main-fixed-header {
+    position: relative !important;
+    top: auto !important;
+    min-height: 42px !important;
+    height: 42px !important;
+    padding: 0px 10px 0px 0px !important;
+    margin-top: 0px !important;
+    margin-bottom: 2px !important;
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    display: flex !important;
+    align-items: flex-end !important;
+    justify-content: space-between !important;
+}
+
+.main-fixed-title,
+.title-main {
+    font-size: clamp(27px, 2.05vw, 36px) !important;
+    line-height: 0.98 !important;
+    margin: 0px !important;
+    padding: 0px !important;
+    white-space: normal !important;
+}
+
+.main-fixed-logo,
+.header-logo-box {
+    margin: 0px !important;
+    padding: 0px !important;
+    align-self: flex-end !important;
+}
+
+.main-fixed-logo img,
+.header-logo-box img {
+    width: 112px !important;
+    max-width: 112px !important;
+    height: auto !important;
+    margin: 0px !important;
+    padding: 0px !important;
+}
+
+.main-fixed-header-spacer,
+.header-separador {
+    height: 0px !important;
+    min-height: 0px !important;
+    max-height: 0px !important;
+    margin: 0px !important;
+    padding: 0px !important;
+}
+
+/* Reduce espacios verticales generales entre bloques */
+div[data-testid="stVerticalBlock"] {
+    gap: 0.32rem !important;
 }
 
 .panel-title {
-    color: #D1FAE5;
-    font-weight: 1000;
-    font-size: 22px;
-    margin-top: 16px;
-    margin-bottom: 8px;
-    letter-spacing: -.35px;
+    margin-top: 8px !important;
+    margin-bottom: 5px !important;
 }
 
-.subsection-label {
-    color: #A7F3D0;
-    font-size: 14px;
-    font-weight: 900;
-    text-transform: uppercase;
-    letter-spacing: .7px;
-    margin: 10px 0 8px 2px;
-}
-
-div[data-testid="stVerticalBlockBorderWrapper"] {
-    background: linear-gradient(145deg, rgba(2,8,6,.92), rgba(7,27,21,.84)) !important;
-    border: 1px solid rgba(52,211,153,.30) !important;
-    border-radius: 21px !important;
-    box-shadow: 0 12px 30px rgba(0,0,0,.32), inset 0 1px 0 rgba(110,231,183,.08) !important;
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-}
-
-div[data-testid="stVerticalBlockBorderWrapper"] > div {
-    padding: 7px 10px 4px 10px !important;
-}
-
-[data-testid="stPlotlyChart"] {
-    background: linear-gradient(145deg, rgba(2,8,6,.93), rgba(7,27,21,.86));
-    border: 1px solid rgba(52,211,153,.28);
-    border-radius: 20px;
-    padding: 5px 8px 0 8px;
-    box-shadow: 0 12px 30px rgba(0,0,0,.30), inset 0 1px 0 rgba(110,231,183,.08);
-    backdrop-filter: blur(9px);
-    -webkit-backdrop-filter: blur(9px);
-    overflow: hidden;
-}
-
-div[data-testid="stDataFrame"] {
-    background: rgba(1,7,5,.92);
-    border: 1px solid rgba(52,211,153,.28);
-    border-radius: 18px;
-    padding: 3px;
-    box-shadow: 0 10px 26px rgba(0,0,0,.30);
-    overflow: hidden;
-}
-
-.alert-card,
-.compromiso-card {
-    background: rgba(3,12,9,.92);
-    border: 1px solid rgba(52,211,153,.28);
-    border-radius: 16px;
-    padding: 13px 14px;
-    margin-bottom: 10px;
-    box-shadow: 0 7px 18px rgba(15,23,42,.055);
-    backdrop-filter: blur(8px);
-}
-
-.alert-card {
-    border-left: 6px solid #ef4444;
-}
-
-.alert-card.ok {
-    border-left-color: #22c55e;
-}
-
-.alert-title,
-.compromiso-title {
-    font-weight: 950;
-    color: #F4FFF9;
-    font-size: 12.8px;
-}
-
-.alert-sub,
-.compromiso-sub {
-    color: #A9D5C3;
-    font-size: 11.8px;
-    margin-top: 5px;
-    line-height: 1.35;
-}
-
-.compromiso-head {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 8px;
-}
-
-.compromiso-badge {
-    white-space: nowrap;
-    padding: 5px 9px;
-    border-radius: 999px;
-    font-size: 10.5px;
-    font-weight: 950;
-    color: #b54708;
-    background: #fffaeb;
-    border: 1px solid #fec84b;
-}
-
-.compromiso-badge.vencida {
-    color: #b42318;
-    background: #fef3f2;
-    border-color: #fda29b;
-}
-
-.badge {
-    display: inline-block;
-    padding: 5px 10px;
-    border-radius: 999px;
-    font-size: 12px;
-    font-weight: 950;
-}
-
-.badge-ok { background:#dcfce7; color:#166534; }
-.badge-proceso { background:#dbeafe; color:#1d4ed8; }
-.badge-pendiente { background:#fef9c3; color:#854d0e; }
-.badge-vencida { background:#fee2e2; color:#991b1b; }
-.badge-neutro { background:#e2e8f0; color:#334155; }
-
-.stAlert {
-    border-radius: 16px !important;
-    background: rgba(3,12,9,.58) !important;
-    border: 1px solid rgba(52,211,153,.30) !important;
-}
-
-/*
-Transparencia uniforme para todos los módulos. Los paneles conservan contraste
-para la lectura, pero permiten ver el sello de agua como en KPI SSO.
-*/
+/* Dashboard: acerca KPI al título */
 .kpi-card {
-    background: linear-gradient(
-        145deg,
-        rgba(3,10,8,.64),
-        rgba(8,31,24,.50)
-    ) !important;
-    box-shadow: 0 10px 25px rgba(0,0,0,.24), inset 0 1px 0 rgba(110,231,183,.10) !important;
-    backdrop-filter: blur(5px) !important;
-    -webkit-backdrop-filter: blur(5px) !important;
+    margin-top: 0px !important;
 }
 
-div[data-testid="stVerticalBlockBorderWrapper"] {
-    background: linear-gradient(
-        145deg,
-        rgba(2,8,6,.58),
-        rgba(7,27,21,.46)
-    ) !important;
-    box-shadow: 0 10px 25px rgba(0,0,0,.22), inset 0 1px 0 rgba(110,231,183,.08) !important;
-    backdrop-filter: blur(5px) !important;
-    -webkit-backdrop-filter: blur(5px) !important;
-}
-
-[data-testid="stPlotlyChart"] {
-    background: linear-gradient(
-        145deg,
-        rgba(2,8,6,.50),
-        rgba(7,27,21,.40)
-    ) !important;
-    box-shadow: 0 10px 25px rgba(0,0,0,.20), inset 0 1px 0 rgba(110,231,183,.07) !important;
-    backdrop-filter: blur(4px) !important;
-    -webkit-backdrop-filter: blur(4px) !important;
-}
-
-div[data-testid="stDataFrame"],
-.tabla-general-wrap,
-.cert-table-wrap {
-    background: rgba(1,7,5,.56) !important;
-    box-shadow: 0 8px 22px rgba(0,0,0,.20) !important;
-    backdrop-filter: blur(4px) !important;
-    -webkit-backdrop-filter: blur(4px) !important;
-}
-
-.tabla-general-compacta th,
-.cert-table th {
-    background: rgba(27,32,41,.68) !important;
-}
-
-.alert-card,
-.compromiso-card {
-    background: rgba(3,12,9,.58) !important;
-    box-shadow: 0 7px 18px rgba(0,0,0,.16) !important;
-    backdrop-filter: blur(4px) !important;
-    -webkit-backdrop-filter: blur(4px) !important;
-}
-
-.cert-equipment-card {
-    background:
-        radial-gradient(
-            circle at 100% 100%,
-            rgba(16,185,129,.08) 0,
-            rgba(16,185,129,.08) 24%,
-            transparent 25%
-        ),
-        rgba(4,24,18,.58) !important;
-    box-shadow: 0 10px 24px rgba(0,0,0,.18) !important;
-    backdrop-filter: blur(4px) !important;
-    -webkit-backdrop-filter: blur(4px) !important;
-}
-
-.cumplimiento-hero {
-    background: linear-gradient(
-        135deg,
-        rgba(15,23,42,.58),
-        rgba(6,78,59,.26)
-    ) !important;
-    backdrop-filter: blur(4px) !important;
-    -webkit-backdrop-filter: blur(4px) !important;
-}
-
-.persona-card {
-    background: rgba(15,23,42,.48) !important;
-    backdrop-filter: blur(4px) !important;
-    -webkit-backdrop-filter: blur(4px) !important;
-}
-
-/*
-Sello de agua exclusivo del Panel General. Ocupa toda el área principal,
-desde el borde del menú lateral hasta el extremo derecho de la pantalla.
-*/
-.panel-watermark-layer {
-    position: fixed;
-    left: var(--sidebar-fixed-width);
-    right: 0;
-    top: 0;
-    bottom: 0;
-    width: calc(100vw - var(--sidebar-fixed-width));
-    height: 100vh;
-    display: flex;
-    align-items: stretch;
-    justify-content: stretch;
-    overflow: hidden;
-    pointer-events: none;
-    z-index: 8;
-}
-
-.panel-watermark-img {
-    display: block;
-    width: 100%;
-    height: 100%;
-    max-width: none;
-    max-height: none;
-    object-fit: cover;
-    object-position: center center;
-    transform: scale(1.35);
-    transform-origin: center center;
-    opacity: .16;
-    filter: saturate(.72) contrast(1.02) brightness(.84);
-    user-select: none;
-}
-
-/*
-Sello de agua SAIVAM para los módulos del menú lateral.
-La imagen se muestra completa, sin recortes, ocupando el área disponible
-entre el menú lateral y el borde derecho de la ventana.
-*/
-.saivam-page-watermark-layer {
-    position: fixed;
-    left: var(--sidebar-fixed-width);
-    right: 0;
-    top: 0;
-    bottom: 0;
-    width: calc(100vw - var(--sidebar-fixed-width));
-    height: 100vh;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    overflow: hidden;
-    pointer-events: none;
-    z-index: 8;
-    padding: 1.2rem 1.4rem;
-    box-sizing: border-box;
-}
-
-.saivam-page-watermark-img {
-    display: block;
-    width: 100%;
-    height: 100%;
-    max-width: 100%;
-    max-height: 100%;
-    object-fit: contain;
-    object-position: center center;
-    opacity: .15;
-    filter: saturate(.82) contrast(1.04) brightness(.88);
-    user-select: none;
-}
-
-@media (max-width: 900px) {
-    .saivam-page-watermark-layer {
-        left: var(--sidebar-fixed-width);
-        width: calc(100vw - var(--sidebar-fixed-width));
-        height: 100vh;
-        padding: .7rem;
+/* En pantallas más bajas, sube un poco más */
+@media (max-height: 850px) {
+    .main .block-container,
+    .block-container,
+    div[data-testid="stMainBlockContainer"],
+    section.main > div {
+        margin-top: -112px !important;
     }
 
-    .saivam-page-watermark-img {
-        object-fit: contain;
-        opacity: .12;
-    }
-}
-
-/* Sello de agua exclusivo del módulo Cumplimientos SSO. */
-.cumplimientos-watermark-layer {
-    position: fixed;
-    left: var(--sidebar-fixed-width);
-    right: 0;
-    top: 0;
-    bottom: 0;
-    width: calc(100vw - var(--sidebar-fixed-width));
-    height: 100vh;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    overflow: hidden;
-    pointer-events: none;
-    z-index: 0;
-}
-
-.cumplimientos-watermark-img {
-    display: block;
-    width: 100%;
-    height: 100%;
-    max-width: none;
-    max-height: none;
-    object-fit: cover;
-    object-position: center center;
-    opacity: .24;
-    filter: grayscale(.02) saturate(.95) contrast(1.12) brightness(.92);
-    transform: scale(1.08);
-    transform-origin: center center;
-    user-select: none;
-}
-
-@media (max-width: 900px) {
-    .cumplimientos-watermark-layer {
-        left: var(--sidebar-fixed-width);
-        width: calc(100vw - var(--sidebar-fixed-width));
-        height: 100vh;
+    .main-fixed-header {
+        min-height: 38px !important;
+        height: 38px !important;
     }
 
-    .cumplimientos-watermark-img {
-        opacity: .19;
-        transform: scale(1.12);
+    .main-fixed-title,
+    .title-main {
+        font-size: clamp(25px, 1.95vw, 34px) !important;
+    }
+
+    .main-fixed-logo img,
+    .header-logo-box img {
+        width: 104px !important;
+        max-width: 104px !important;
     }
 }
+</style>
+    """,
+    unsafe_allow_html=True,
+)
 
-.footer-app {
-    width: 100%;
-    margin: 28px auto 8px auto;
-    padding: 0 18px;
-    box-sizing: border-box;
-    color: #9FCBB9;
-    font-size: 10.4px;
-    font-weight: 740;
-    text-align: center;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    line-height: 1.45;
+
+# =========================================================
+# AJUSTE FINAL V5.8: ESPACIO SUPERIOR Y DASHBOARD MÁS EQUILIBRADO
+# - Baja levemente los títulos para que no queden pegados al borde superior.
+# - Deja un pequeño espacio entre título/logo y contenido.
+# - Compacta la zona Gastos Adicionales / Próximas Mantenciones.
+# =========================================================
+st.markdown(
+    """
+<style>
+/* Baja levemente todas las páginas, sin volver a dejar el espacio superior excesivo */
+.main .block-container,
+.block-container,
+div[data-testid="stMainBlockContainer"],
+section.main > div {
+    margin-top: -72px !important;
+    padding-top: 0px !important;
+    padding-bottom: 0.65rem !important;
 }
 
-
-.alert-card {
-    width: 100%;
-    box-sizing: border-box;
-    margin: 0 0 9px 0;
-    padding: 11px 14px;
-    border: 1px solid rgba(35, 189, 128, .42);
-    border-left: 5px solid #F59E0B;
-    border-radius: 12px;
-    background: rgba(3, 18, 13, .88);
+.main-fixed-header {
+    min-height: 50px !important;
+    height: 50px !important;
+    margin-top: 0px !important;
+    margin-bottom: 9px !important;
+    padding-top: 4px !important;
+    padding-right: 10px !important;
+    align-items: flex-end !important;
 }
 
-.alert-card-title {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    color: #F3FFF8;
-    font-size: 12px;
-    font-weight: 850;
+.main-fixed-title,
+.title-main {
+    line-height: 1.03 !important;
+    margin: 0px !important;
+    padding: 0px !important;
 }
 
-.alert-card-title span {
-    flex: 0 0 auto;
-    padding: 3px 8px;
-    border: 1px solid rgba(251, 191, 36, .55);
-    border-radius: 999px;
-    background: rgba(245, 158, 11, .13);
-    color: #FDE68A;
-    font-size: 9px;
-    font-weight: 800;
+.main-fixed-logo,
+.header-logo-box {
+    align-self: flex-end !important;
+    margin-bottom: 2px !important;
 }
 
-.alert-card-text {
-    margin-top: 5px;
-    color: #A9D2C1;
-    font-size: 10px;
-    line-height: 1.35;
+.main-fixed-logo img,
+.header-logo-box img {
+    width: 116px !important;
+    max-width: 116px !important;
 }
 
-.footer-app.footer-app-dos-lineas {
-    display: block !important;
+.main-fixed-header-spacer,
+.header-separador {
+    height: 4px !important;
+    min-height: 4px !important;
+    max-height: 4px !important;
+}
+
+/* Menos aire entre secciones del Dashboard */
+div[data-testid="stVerticalBlock"] {
+    gap: 0.24rem !important;
+}
+
+.panel-title {
+    margin-top: 5px !important;
+    margin-bottom: 4px !important;
+}
+
+/* Tablas más compactas para que Gastos Adicionales se vea completo */
+.tabla-clara-wrap {
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+}
+
+.tabla-clara {
+    font-size: 10.8px !important;
+    table-layout: fixed !important;
+    width: 100% !important;
+}
+
+.tabla-clara thead th,
+.tabla-clara tbody td {
+    padding: 5px 7px !important;
+    line-height: 1.16 !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+}
+
+/* Montos siempre en una línea */
+.tabla-clara td.monto,
+.tabla-clara th.monto,
+.tabla-clara td:last-child,
+.tabla-clara th:last-child {
+    white-space: nowrap !important;
+    overflow-wrap: normal !important;
+    word-break: normal !important;
+    text-align: right !important;
+}
+
+/* Próximas Mantenciones más compactas verticalmente, pero legibles */
+.proximas-box .panel-title {
+    margin-top: 0px !important;
+}
+
+.next-item {
+    min-height: 28px !important;
+    padding: 2px 0 !important;
+}
+
+.next-title {
+    font-size: 10.8px !important;
+    line-height: 1.05 !important;
+}
+
+.next-sub {
+    font-size: 9px !important;
+    line-height: 1.05 !important;
+    margin-top: 0px !important;
+}
+
+.badge-days {
+    font-size: 8.7px !important;
+    padding: 3px 6px !important;
+    min-width: 72px !important;
     text-align: center !important;
 }
-.footer-titulo {
-    display: block;
-    margin-bottom: 2px;
-    font-size: 12px;
-    font-weight: 900;
-    color: #B8E8D3;
-}
-.footer-detalle {
-    display: block;
-    font-size: 10.4px;
-    font-weight: 740;
-    color: #9FCBB9;
-    line-height: 1.35;
-}
 
-
-
-
-
-
-
-/* Sello de agua exclusivo del módulo Certificaciones. */
-.certification-watermark-layer {
-    position: fixed;
-    left: var(--sidebar-fixed-width);
-    top: 0;
-    width: calc(100vw - var(--sidebar-fixed-width));
-    height: 100vh;
-    overflow: hidden;
-    pointer-events: none;
-    z-index: 0;
-}
-
-.certification-watermark-img {
-    display: block;
-    width: 100%;
-    height: 100%;
-    max-width: none;
-    max-height: none;
-    object-fit: cover;
-    object-position: center center;
-    opacity: .22;
-    filter:
-        grayscale(.08)
-        saturate(.78)
-        contrast(1.08)
-        brightness(.72);
-    transform: scale(1.06);
-    transform-origin: center center;
-    user-select: none;
-}
-
-section.main,
-[data-testid="stAppViewContainer"] > .main {
-    position: relative;
-    z-index: 1;
-}
-
-@media (max-width: 900px) {
-    .certification-watermark-layer {
-        left: var(--sidebar-fixed-width);
-        width: calc(100vw - var(--sidebar-fixed-width));
-        height: 100vh;
+/* En pantallas bajas se conserva el aprovechamiento, pero sin cortar el título */
+@media (max-height: 850px) {
+    .main .block-container,
+    .block-container,
+    div[data-testid="stMainBlockContainer"],
+    section.main > div {
+        margin-top: -82px !important;
     }
 
-    .certification-watermark-img {
-        width: 100%;
-        height: 100%;
-        object-fit: cover;
-        opacity: .18;
-        transform: scale(1.08);
+    .main-fixed-header {
+        min-height: 46px !important;
+        height: 46px !important;
+        margin-bottom: 7px !important;
     }
 }
+</style>
+    """,
+    unsafe_allow_html=True,
+)
 
-/* Tarjetas fotográficas del módulo Certificaciones. */
-.cert-equipment-card {
-    width: 100%;
-    min-height: 285px;
-    padding: 6px;
-    margin-bottom: 8px;
-    border: 1px solid rgba(52, 211, 153, .38);
-    border-radius: 20px;
-    background:
-        radial-gradient(
-            circle at 100% 100%,
-            rgba(16, 185, 129, .12) 0,
-            rgba(16, 185, 129, .12) 24%,
-            transparent 25%
-        ),
-        rgba(4, 24, 18, .88);
-    box-shadow: 0 13px 28px rgba(0, 0, 0, .24);
-    box-sizing: border-box;
-    overflow: hidden;
+
+# =========================================================
+# OVERRIDE VISUAL FINAL V5.9
+# =========================================================
+st.markdown(
+    """
+<style>
+:root {
+    --menu-panel-width: 345px !important;
+    --menu-inner-width: 304px !important;
+    --menu-panel-width-final: 345px !important;
+    --menu-inner-width-final: 304px !important;
 }
-
-.cert-equipment-image-shell {
-    width: 100%;
-    height: 102px;
-    margin-bottom: 10px;
-    border-radius: 10px;
-    overflow: hidden;
-    background: rgba(232, 255, 245, .10);
-    border: 1px solid rgba(184, 232, 212, .18);
+section[data-testid="stSidebar"] {
+    width: 345px !important;
+    min-width: 345px !important;
+    max-width: 345px !important;
 }
-
-.cert-equipment-img {
-    display: block;
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    object-position: center;
+section[data-testid="stSidebar"] > div,
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+    width: 345px !important;
+    min-width: 345px !important;
+    max-width: 345px !important;
 }
-
-.cert-equipment-placeholder {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 42px;
-    background: rgba(255, 255, 255, .05);
+section[data-testid="stSidebar"] .menu-panel-content,
+section[data-testid="stSidebar"] .menu-line,
+section[data-testid="stSidebar"] .menu-footer-box,
+section[data-testid="stSidebar"] div[data-testid="stButton"],
+section[data-testid="stSidebar"] div[data-testid="stSelectbox"],
+section[data-testid="stSidebar"] [data-baseweb="select"],
+section[data-testid="stSidebar"] [data-baseweb="select"] > div,
+section[data-testid="stSidebar"] .menu-brand,
+section[data-testid="stSidebar"] .menu-active-item {
+    width: 304px !important;
+    max-width: 304px !important;
 }
-
-.cert-equipment-title {
-    min-height: 30px;
-    color: #F4FFF9 !important;
-    font-size: 13px;
-    font-weight: 950;
-    line-height: 1.22;
-    margin: 2px 2px 4px 2px;
+section[data-testid="stSidebar"] div[data-testid="stButton"] button {
+    width: 304px !important;
+    min-height: 52px !important;
+    font-size: 15px !important;
 }
-
-.cert-equipment-detail {
-    min-height: 27px;
-    color: #BBD7CA !important;
-    font-size: 11.5px;
-    line-height: 1.35;
-    margin: 3px 2px;
-}
-
-.cert-equipment-detail span {
-    color: #E4FFF2 !important;
-    font-weight: 900;
-}
-
-.cert-equipment-status {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 22px;
-    margin: 4px 2px 4px 2px;
-    padding: 3px 8px;
-    border-radius: 999px;
-    font-size: 12px;
-    font-weight: 950;
-    line-height: 1;
-}
-
-.cert-status-vigente {
-    color: #4ADE80 !important;
-    background: rgba(22, 101, 52, .30);
-    border: 1px solid rgba(74, 222, 128, .42);
-}
-
-.cert-status-por-vencer {
-    color: #FBBF24 !important;
-    background: rgba(146, 64, 14, .30);
-    border: 1px solid rgba(251, 191, 36, .42);
-}
-
-.cert-status-vencida {
-    color: #FCA5A5 !important;
-    background: rgba(153, 27, 27, .32);
-    border: 1px solid rgba(252, 165, 165, .42);
-}
-
-.cert-status-sin-vencimiento {
-    color: #CBD5E1 !important;
-    background: rgba(71, 85, 105, .32);
-    border: 1px solid rgba(203, 213, 225, .30);
-}
-
-.cert-equipment-days {
-    color: #A7C8B9 !important;
-    font-size: 12px;
-    font-weight: 750;
-    margin: 4px 2px 1px 2px;
-}
-
-@media (max-width: 1250px) {
-    .cert-equipment-card {
-        min-height: 270px;
-        padding: 5px;
-    }
-
-    .cert-equipment-image-shell {
-        height: 92px;
-    }
-
-    .cert-equipment-title {
-        font-size: 12px;
-        min-height: 28px;
-    }
-
-    .cert-equipment-detail {
-        font-size: 9.8px;
-        min-height: 24px;
-    }
-}
-
-/* Sello de agua exclusivo del módulo Reconocimientos. */
-.recognition-watermark-layer {
-    position: fixed;
-    left: var(--sidebar-fixed-width);
-    top: 0;
-    width: calc(100vw - var(--sidebar-fixed-width));
-    height: 100vh;
-    overflow: hidden;
-    pointer-events: none;
-    z-index: 0;
-}
-
-.recognition-watermark-img {
-    display: block;
-    width: 100%;
-    height: 100%;
-    max-width: none;
-    max-height: none;
-    object-fit: cover;
-    object-position: center center;
-    opacity: .13;
-    filter: grayscale(.10) saturate(.78) contrast(1.08) brightness(.72);
-    transform: scale(1.02);
-    transform-origin: center center;
-    user-select: none;
-}
-
-section.main,
-[data-testid="stAppViewContainer"] > .main {
-    position: relative;
-    z-index: 1;
-}
-
-@media (max-width: 900px) {
-    .recognition-watermark-layer {
-        left: var(--sidebar-fixed-width);
-        width: calc(100vw - var(--sidebar-fixed-width));
-        height: 100vh;
-    }
-
-    .recognition-watermark-img {
-        width: 100%;
-        height: 100%;
-        object-fit: cover;
-        opacity: .11;
-        transform: scale(1.05);
-    }
-}
-
-/* Carrusel del módulo Reconocimientos. */
-.recognition-carousel-wrapper {
-    width: 100%;
-    display: flex;
-    justify-content: center;
-    margin: 8px 0 8px 0;
-}
-
-.recognition-photo-card {
-    width: min(100%, 980px);
-    padding: 0;
-    border: 1px solid rgba(52, 211, 153, .42);
-    border-radius: 20px;
-    background: transparent !important;
-    box-shadow: none;
-    box-sizing: border-box;
-    overflow: hidden;
-}
-
-.recognition-photo-img {
-    display: block;
-    width: 100%;
-    height: 500px;
-    object-fit: contain;
-    object-position: center;
-    border-radius: 19px;
-    background: transparent !important;
-}
-.recognition-carousel-counter {
-    min-height: 40px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: #B8E8D4 !important;
-    font-size: 13px;
-    font-weight: 900;
-    text-align: center;
-}
-
-@media (max-width: 1100px) {
-    .recognition-photo-img {
-        height: 390px;
-    }
-}
-
-@media (max-width: 700px) {
-    .recognition-photo-img {
-        height: 280px;
-    }
-}
-
-/* Refuerzo del tema oscuro para el área principal. El menú conserva su paleta verde. */
 [data-testid="stAppViewContainer"] > .main,
-[data-testid="stAppViewContainer"] > section[data-testid="stMain"],
-[data-testid="stMainBlockContainer"] {
-    background: transparent !important;
-    color: #F4FFF9 !important;
+section.main,
+main {
+    margin-left: 345px !important;
+    width: calc(100vw - 345px) !important;
+    max-width: calc(100vw - 345px) !important;
+}
+[data-testid="collapsedControl"],
+button[title="Collapse sidebar"],
+button[title="Close sidebar"],
+button[aria-label="Collapse sidebar"],
+button[aria-label="Close sidebar"] {
+    display: flex !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    pointer-events: auto !important;
+    height: 34px !important;
+    min-height: 34px !important;
+    width: 34px !important;
+    min-width: 34px !important;
+    z-index: 10050 !important;
+}
+.main .block-container,
+.block-container,
+div[data-testid="stMainBlockContainer"],
+section.main > div {
+    margin-top: -62px !important;
+    padding-top: 0px !important;
+}
+.main-fixed-header {
+    min-height: 58px !important;
+    height: 58px !important;
+    margin-top: 0px !important;
+    margin-bottom: 12px !important;
+    padding-top: 8px !important;
+    align-items: flex-end !important;
+}
+.main-fixed-title,
+.title-main {
+    font-size: clamp(28px, 2.1vw, 37px) !important;
+    line-height: 1.03 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}
+.main-fixed-logo img,
+.header-logo-box img {
+    width: 116px !important;
+    max-width: 116px !important;
+}
+.main-fixed-header-spacer,
+.header-separador {
+    height: 8px !important;
+    min-height: 8px !important;
+}
+.panel-title {
+    margin-top: 7px !important;
+    margin-bottom: 5px !important;
+}
+[data-testid="stPlotlyChart"] {
+    overflow: hidden !important;
+    border-radius: 12px !important;
+}
+.dashboard-proximas .next-item,
+.proximas-box .next-item {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto !important;
+    align-items: center !important;
+    column-gap: 8px !important;
+    min-height: 34px !important;
+    padding: 2px 0 !important;
+}
+.dashboard-proximas .next-title,
+.proximas-box .next-title {
+    font-size: 11.8px !important;
+    line-height: 1.02 !important;
+    margin-bottom: 1px !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+}
+.dashboard-proximas .next-sub-line,
+.proximas-box .next-sub-line,
+.dashboard-proximas .next-sub,
+.proximas-box .next-sub {
+    display: block !important;
+    font-size: 9.2px !important;
+    line-height: 1.05 !important;
+    margin: 0 !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+}
+.dashboard-proximas .badge-days,
+.proximas-box .badge-days {
+    min-width: 76px !important;
+    max-width: 86px !important;
+    font-size: 8.7px !important;
+    padding: 4px 6px !important;
+    white-space: nowrap !important;
+}
+</style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# =========================================================
+# AJUSTE FINAL SOLICITADO V6.0
+# 1) Menú izquierdo 20% más angosto y botón nativo claro para ocultar/mostrar.
+# 2) Títulos de distribución dentro de fondo blanco del gráfico.
+# 3) Próximas mantenciones ordenadas, con tipografía uniforme y mejor espaciado.
+# 4) Gráfico de torta de Historial de Mantenciones encuadrado completo.
+# =========================================================
+st.markdown(
+    """
+<style>
+:root {
+    --menu-panel-width: 276px !important;
+    --menu-inner-width: 244px !important;
+    --menu-panel-width-final: 276px !important;
+    --menu-inner-width-final: 244px !important;
+    --content-padding-x: 16px !important;
 }
 
-[data-testid="stMain"] p,
-[data-testid="stMain"] span,
-[data-testid="stMain"] label,
-[data-testid="stMain"] li {
-    color: #D7F8E9;
+/* 1. Menú izquierdo 20% más angosto */
+section[data-testid="stSidebar"] {
+    width: var(--menu-panel-width) !important;
+    min-width: var(--menu-panel-width) !important;
+    max-width: var(--menu-panel-width) !important;
+    transition: width .22s ease, min-width .22s ease, max-width .22s ease !important;
+}
+section[data-testid="stSidebar"] > div,
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+    width: var(--menu-panel-width) !important;
+    min-width: var(--menu-panel-width) !important;
+    max-width: var(--menu-panel-width) !important;
+    padding: 10px 12px 14px 12px !important;
+    box-sizing: border-box !important;
+}
+section[data-testid="stSidebar"] .menu-panel-content,
+section[data-testid="stSidebar"] .menu-brand,
+section[data-testid="stSidebar"] .menu-line,
+section[data-testid="stSidebar"] .menu-footer-box,
+section[data-testid="stSidebar"] div[data-testid="stButton"],
+section[data-testid="stSidebar"] div[data-testid="stSelectbox"],
+section[data-testid="stSidebar"] [data-baseweb="select"],
+section[data-testid="stSidebar"] [data-baseweb="select"] > div,
+section[data-testid="stSidebar"] .menu-active-item,
+section[data-testid="stSidebar"] div[data-testid="stButton"] button {
+    width: var(--menu-inner-width) !important;
+    min-width: var(--menu-inner-width) !important;
+    max-width: var(--menu-inner-width) !important;
+    box-sizing: border-box !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"] button,
+section[data-testid="stSidebar"] .menu-active-item {
+    min-height: 48px !important;
+    height: 48px !important;
+    font-size: 14px !important;
+    padding: 9px 11px !important;
+    border-radius: 14px !important;
+}
+[data-testid="stAppViewContainer"] > .main,
+div[data-testid="stMain"],
+section.main,
+main {
+    margin-left: var(--menu-panel-width) !important;
+    width: calc(100vw - var(--menu-panel-width)) !important;
+    max-width: calc(100vw - var(--menu-panel-width)) !important;
+}
+.main .block-container,
+.block-container,
+div[data-testid="stMainBlockContainer"] {
+    padding-left: var(--content-padding-x) !important;
+    padding-right: var(--content-padding-x) !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
 }
 
-[data-testid="stMain"] h1,
-[data-testid="stMain"] h2,
-[data-testid="stMain"] h3,
-[data-testid="stMain"] h4 {
-    color: #F4FFF9 !important;
+/* Botón claro para minimizar/agrandar menú */
+[data-testid="collapsedControl"],
+[data-testid="stSidebarCollapsedControl"],
+button[title="Collapse sidebar"],
+button[title="Close sidebar"],
+button[title="Open sidebar"],
+button[aria-label="Collapse sidebar"],
+button[aria-label="Close sidebar"],
+button[aria-label="Open sidebar"] {
+    display: flex !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    pointer-events: auto !important;
+    position: fixed !important;
+    top: 14px !important;
+    left: calc(var(--menu-panel-width) - 17px) !important;
+    width: 38px !important;
+    height: 38px !important;
+    min-width: 38px !important;
+    min-height: 38px !important;
+    border-radius: 999px !important;
+    background: #2563eb !important;
+    border: 2px solid #ffffff !important;
+    color: #ffffff !important;
+    box-shadow: 0 8px 20px rgba(15,23,42,.35) !important;
+    z-index: 100000 !important;
+}
+[data-testid="collapsedControl"] svg,
+[data-testid="stSidebarCollapsedControl"] svg,
+button[title="Collapse sidebar"] svg,
+button[title="Close sidebar"] svg,
+button[title="Open sidebar"] svg,
+button[aria-label="Collapse sidebar"] svg,
+button[aria-label="Close sidebar"] svg,
+button[aria-label="Open sidebar"] svg {
+    color: #ffffff !important;
+    fill: #ffffff !important;
+    stroke: #ffffff !important;
 }
 
-[data-testid="stMain"] .stCaption,
-[data-testid="stMain"] small {
-    color: #9FCBB9 !important;
+/* 2. Títulos de distribución dentro de tarjeta blanca */
+.chart-title,
+.panel-title.chart-title {
+    display: block !important;
+    width: 100% !important;
+    background: rgba(255,255,255,.82) !important;
+    border: 1px solid rgba(203,213,225,.75) !important;
+    border-bottom: 0 !important;
+    border-radius: 18px 18px 0 0 !important;
+    padding: 10px 14px 7px 14px !important;
+    margin: 8px 0 -1px 0 !important;
+    box-sizing: border-box !important;
+}
+.chart-title + div[data-testid="stPlotlyChart"],
+.panel-title.chart-title + div[data-testid="stPlotlyChart"] {
+    background: rgba(255,255,255,.82) !important;
+    border: 1px solid rgba(203,213,225,.75) !important;
+    border-top: 0 !important;
+    border-radius: 0 0 18px 18px !important;
+    padding: 4px 8px 8px 8px !important;
+    box-sizing: border-box !important;
 }
 
-[data-testid="stMain"] [data-baseweb="select"] > div,
-[data-testid="stMain"] input,
-[data-testid="stMain"] textarea {
-    background: rgba(2,10,7,.94) !important;
-    color: #F4FFF9 !important;
-    border-color: rgba(52,211,153,.34) !important;
+/* 3. Próximas Mantenciones más ordenadas */
+.dashboard-proximas,
+.proximas-box {
+    padding: 8px 10px !important;
+    border-radius: 16px !important;
+}
+.dashboard-proximas .next-item,
+.proximas-box .next-item {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) 92px !important;
+    align-items: center !important;
+    column-gap: 10px !important;
+    min-height: 44px !important;
+    padding: 6px 0 !important;
+    border-bottom: 1px solid rgba(148,163,184,.28) !important;
+}
+.dashboard-proximas .next-item:last-child,
+.proximas-box .next-item:last-child {
+    border-bottom: 0 !important;
+}
+.dashboard-proximas .next-title,
+.proximas-box .next-title {
+    font-size: 12.8px !important;
+    line-height: 1.15 !important;
+    font-weight: 950 !important;
+    margin: 0 0 2px 0 !important;
+    color: #0f172a !important;
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+}
+.dashboard-proximas .next-sub-line,
+.proximas-box .next-sub-line,
+.dashboard-proximas .next-sub,
+.proximas-box .next-sub {
+    font-size: 12.3px !important;
+    line-height: 1.18 !important;
+    font-weight: 700 !important;
+    margin: 0 !important;
+    color: #0f172a !important;
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+}
+.dashboard-proximas .badge-days,
+.proximas-box .badge-days {
+    width: 92px !important;
+    min-width: 92px !important;
+    max-width: 92px !important;
+    font-size: 10.2px !important;
+    line-height: 1.1 !important;
+    font-weight: 950 !important;
+    padding: 7px 6px !important;
+    white-space: normal !important;
+    text-align: center !important;
+    border-radius: 999px !important;
 }
 
-[data-testid="stMain"] button {
-    border-color: rgba(52,211,153,.38) !important;
+/* 4. Historial de Mantenciones: torta completa dentro de pantalla */
+div[data-testid="stPlotlyChart"] {
+    max-width: 100% !important;
+    overflow: hidden !important;
+}
+.js-plotly-plot,
+.plot-container,
+.svg-container {
+    max-width: 100% !important;
+    overflow: visible !important;
 }
 
-@media (max-width: 1100px) {
-    /* Se mantiene exactamente el mismo menú y separación del contenido. */
-    section[data-testid="stSidebar"] div[role="radiogroup"] p {
-        font-size: 12.2px !important;
-    }
-
-    .panel-watermark-layer {
-        left: var(--sidebar-fixed-width);
-        right: 0;
-        top: 0;
-        bottom: 0;
-        width: calc(100vw - var(--sidebar-fixed-width));
-        height: 100vh;
-    }
-
-    .panel-watermark-img {
-        width: 100%;
-        height: 100%;
-        max-width: none;
-        max-height: none;
-        object-fit: cover;
-        object-position: center center;
-        transform: scale(1.35);
-        transform-origin: center center;
-    }
-}
-
-/* =========================================================
-   DISEÑO RESPONSIVO EXCLUSIVO PARA TELÉFONOS Y TABLETS
-   No modifica la presentación de escritorio.
-   ========================================================= */
-@media (max-width: 900px) {
+/* Ajuste responsivo */
+@media (max-width: 1400px) {
     :root {
-        --sidebar-fixed-width: 100%;
+        --menu-panel-width: 260px !important;
+        --menu-inner-width: 228px !important;
+        --content-padding-x: 12px !important;
+    }
+    [data-testid="collapsedControl"],
+    [data-testid="stSidebarCollapsedControl"],
+    button[title="Collapse sidebar"],
+    button[title="Close sidebar"],
+    button[title="Open sidebar"],
+    button[aria-label="Collapse sidebar"],
+    button[aria-label="Close sidebar"],
+    button[aria-label="Open sidebar"] {
+        left: calc(var(--menu-panel-width) - 17px) !important;
+    }
+    .dashboard-proximas .next-item,
+    .proximas-box .next-item {
+        grid-template-columns: minmax(0, 1fr) 82px !important;
+    }
+    .dashboard-proximas .badge-days,
+    .proximas-box .badge-days {
+        width: 82px !important;
+        min-width: 82px !important;
+        max-width: 82px !important;
+        font-size: 9.5px !important;
+    }
+}
+</style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+
+# Refuerzo final posterior a los estilos acumulados.
+aplicar_ajustes_finales_ui()
+
+# =========================================================
+# AJUSTE FINAL V6.2
+# - Botón menú solo con ícono.
+# - Separación segura de títulos/subtítulos para que no queden debajo de tablas, KPIs o tarjetas.
+# =========================================================
+st.markdown(
+    """
+<style>
+section[data-testid="stSidebar"] .menu-toggle-wrap,
+section[data-testid="stSidebar"] .menu-toggle-wrap div[data-testid="stButton"],
+section[data-testid="stSidebar"] .menu-toggle-wrap div[data-testid="stButton"] button {
+    width: 48px !important;
+    min-width: 48px !important;
+    max-width: 48px !important;
+}
+section[data-testid="stSidebar"] .menu-toggle-wrap div[data-testid="stButton"] button {
+    height: 42px !important;
+    min-height: 42px !important;
+    padding: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    text-align: center !important;
+    font-size: 21px !important;
+    line-height: 1 !important;
+}
+.panel-title {
+    display: block !important;
+    clear: both !important;
+    position: relative !important;
+    z-index: 20 !important;
+    color: #0f172a !important;
+    font-weight: 950 !important;
+    font-size: clamp(18px, 1.15vw, 22px) !important;
+    line-height: 1.22 !important;
+    min-height: 30px !important;
+    margin-top: 16px !important;
+    margin-bottom: 12px !important;
+    padding: 2px 0 7px 0 !important;
+    overflow: visible !important;
+}
+.section-head {
+    display: block !important;
+    clear: both !important;
+    position: relative !important;
+    z-index: 21 !important;
+    width: 100% !important;
+    margin: 2px 0 16px 0 !important;
+    padding: 0 0 2px 0 !important;
+    overflow: visible !important;
+}
+.section-head .panel-title,
+.page-section-title {
+    margin-top: 0 !important;
+    margin-bottom: 5px !important;
+    padding: 0 !important;
+    min-height: 28px !important;
+}
+.panel-subtitle {
+    display: block !important;
+    clear: both !important;
+    color: #334155 !important;
+    font-size: 15px !important;
+    line-height: 1.25 !important;
+    font-weight: 850 !important;
+    margin: 0 0 10px 0 !important;
+    padding: 0 !important;
+    position: relative !important;
+    z-index: 21 !important;
+}
+.tabla-clara-wrap {
+    margin-top: 10px !important;
+}
+.equipo-card,
+.kpi-card,
+.tabla-clara-wrap,
+[data-testid="stPlotlyChart"] {
+    position: relative !important;
+    z-index: 2 !important;
+}
+.dashboard-proximas .panel-title,
+.proximas-box .panel-title,
+.chart-title,
+.panel-title.chart-title {
+    margin-top: 0 !important;
+    margin-bottom: 8px !important;
+    min-height: 24px !important;
+    padding-bottom: 4px !important;
+}
+[data-testid="stElementContainer"]:has(.section-head),
+[data-testid="stElementContainer"]:has(.panel-title) {
+    overflow: visible !important;
+}
+</style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# =========================================================
+# AJUSTE FINAL V6.3
+# - Próximas Mantenciones dashboard con formato uniforme por equipo.
+# - Íconos centrados cuando el menú está minimizado.
+# =========================================================
+st.markdown(
+    """
+<style>
+/* ===== Próximas Mantenciones: formato uniforme y con separación real ===== */
+.dashboard-proximas,
+.proximas-box {
+    padding: 12px 14px !important;
+    border-radius: 17px !important;
+    background: rgba(255,255,255,.74) !important;
+}
+
+.dashboard-proximas .panel-title,
+.proximas-box .panel-title {
+    margin: 0 0 9px 0 !important;
+    padding: 0 0 6px 0 !important;
+    min-height: 26px !important;
+    line-height: 1.18 !important;
+}
+
+.dashboard-proximas .next-item,
+.proximas-box .next-item,
+.dashboard-proximas .next-row-pro,
+.proximas-box .next-row-pro {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) 102px !important;
+    align-items: center !important;
+    column-gap: 12px !important;
+    min-height: 62px !important;
+    padding: 8px 0 !important;
+    margin: 0 !important;
+    border-bottom: 1px solid rgba(100,116,139,.24) !important;
+    box-sizing: border-box !important;
+}
+
+.dashboard-proximas .next-item:last-child,
+.proximas-box .next-item:last-child {
+    border-bottom: 0 !important;
+}
+
+.dashboard-proximas .next-info,
+.proximas-box .next-info {
+    min-width: 0 !important;
+    width: 100% !important;
+}
+
+.dashboard-proximas .next-header-row,
+.proximas-box .next-header-row {
+    display: grid !important;
+    grid-template-columns: minmax(120px, 0.95fr) minmax(120px, 1.05fr) !important;
+    gap: 8px !important;
+    align-items: end !important;
+    margin-bottom: 5px !important;
+}
+
+.dashboard-proximas .next-title,
+.proximas-box .next-title {
+    font-size: 13.4px !important;
+    line-height: 1.12 !important;
+    font-weight: 950 !important;
+    color: #0f172a !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    white-space: normal !important;
+}
+
+.dashboard-proximas .next-frequency,
+.proximas-box .next-frequency {
+    font-size: 10.7px !important;
+    line-height: 1.1 !important;
+    font-weight: 850 !important;
+    color: #475569 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    text-align: left !important;
+}
+
+.dashboard-proximas .next-values-grid,
+.proximas-box .next-values-grid {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 6px !important;
+}
+
+.dashboard-proximas .next-value-box,
+.proximas-box .next-value-box {
+    display: grid !important;
+    grid-template-columns: 48px minmax(0, 1fr) !important;
+    align-items: center !important;
+    gap: 4px !important;
+    background: rgba(248,250,252,.62) !important;
+    border: 1px solid rgba(148,163,184,.26) !important;
+    border-radius: 9px !important;
+    padding: 3px 6px !important;
+    min-height: 25px !important;
+    box-sizing: border-box !important;
+}
+
+.dashboard-proximas .next-label,
+.proximas-box .next-label {
+    color: #475569 !important;
+    font-size: 10.1px !important;
+    line-height: 1 !important;
+    font-weight: 900 !important;
+    text-transform: uppercase !important;
+    letter-spacing: .15px !important;
+}
+
+.dashboard-proximas .next-value,
+.proximas-box .next-value {
+    color: #0f172a !important;
+    font-size: 11.5px !important;
+    line-height: 1.08 !important;
+    font-weight: 850 !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+}
+
+.dashboard-proximas .badge-days,
+.proximas-box .badge-days {
+    width: 102px !important;
+    min-width: 102px !important;
+    max-width: 102px !important;
+    min-height: 28px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    text-align: center !important;
+    font-size: 10.2px !important;
+    line-height: 1.12 !important;
+    font-weight: 950 !important;
+    padding: 6px 7px !important;
+    border-radius: 999px !important;
+    white-space: normal !important;
+    box-sizing: border-box !important;
+}
+
+/* ===== Menú minimizado: botones e íconos centrados ===== */
+body:has(.menu-state-collapsed) section[data-testid="stSidebar"] {
+    text-align: center !important;
+}
+
+body:has(.menu-state-collapsed) section[data-testid="stSidebar"] .menu-panel-content,
+body:has(.menu-state-collapsed) section[data-testid="stSidebar"] .menu-brand,
+body:has(.menu-state-collapsed) section[data-testid="stSidebar"] .menu-line,
+body:has(.menu-state-collapsed) section[data-testid="stSidebar"] div[data-testid="stButton"],
+body:has(.menu-state-collapsed) section[data-testid="stSidebar"] .menu-active-item,
+body:has(.menu-state-collapsed) section[data-testid="stSidebar"] .menu-toggle-wrap {
+    margin-left: auto !important;
+    margin-right: auto !important;
+}
+
+body:has(.menu-state-collapsed) section[data-testid="stSidebar"] div[data-testid="stButton"],
+body:has(.menu-state-collapsed) section[data-testid="stSidebar"] .menu-active-item {
+    width: 58px !important;
+    min-width: 58px !important;
+    max-width: 58px !important;
+}
+
+body:has(.menu-state-collapsed) section[data-testid="stSidebar"] div[data-testid="stButton"] button,
+body:has(.menu-state-collapsed) section[data-testid="stSidebar"] .menu-active-item {
+    width: 58px !important;
+    min-width: 58px !important;
+    max-width: 58px !important;
+    height: 58px !important;
+    min-height: 58px !important;
+    padding: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    text-align: center !important;
+    font-size: 21px !important;
+    line-height: 1 !important;
+}
+
+body:has(.menu-state-collapsed) section[data-testid="stSidebar"] div[data-testid="stButton"] button > div,
+body:has(.menu-state-collapsed) section[data-testid="stSidebar"] div[data-testid="stButton"] button p,
+body:has(.menu-state-collapsed) section[data-testid="stSidebar"] div[data-testid="stButton"] button span,
+body:has(.menu-state-collapsed) section[data-testid="stSidebar"] .menu-active-item > div,
+body:has(.menu-state-collapsed) section[data-testid="stSidebar"] .menu-active-item p,
+body:has(.menu-state-collapsed) section[data-testid="stSidebar"] .menu-active-item span {
+    width: 100% !important;
+    margin: 0 auto !important;
+    padding: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    text-align: center !important;
+}
+
+body:has(.menu-state-collapsed) section[data-testid="stSidebar"] .menu-toggle-wrap,
+body:has(.menu-state-collapsed) section[data-testid="stSidebar"] .menu-toggle-wrap div[data-testid="stButton"],
+body:has(.menu-state-collapsed) section[data-testid="stSidebar"] .menu-toggle-wrap div[data-testid="stButton"] button {
+    width: 58px !important;
+    min-width: 58px !important;
+    max-width: 58px !important;
+    height: 48px !important;
+    min-height: 48px !important;
+}
+
+@media (max-width: 1500px) {
+    .dashboard-proximas .next-item,
+    .proximas-box .next-item,
+    .dashboard-proximas .next-row-pro,
+    .proximas-box .next-row-pro {
+        grid-template-columns: minmax(0, 1fr) 94px !important;
+        column-gap: 9px !important;
+        min-height: 60px !important;
+    }
+    .dashboard-proximas .next-header-row,
+    .proximas-box .next-header-row {
+        grid-template-columns: 1fr !important;
+        gap: 2px !important;
+        margin-bottom: 4px !important;
+    }
+    .dashboard-proximas .next-values-grid,
+    .proximas-box .next-values-grid {
+        grid-template-columns: 1fr !important;
+        gap: 4px !important;
+    }
+    .dashboard-proximas .badge-days,
+    .proximas-box .badge-days {
+        width: 94px !important;
+        min-width: 94px !important;
+        max-width: 94px !important;
+        font-size: 9.7px !important;
+    }
+}
+</style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+# =========================================================
+# AJUSTE FINAL V6.5
+# - Baja el cuadro Distribución de Costos en Dashboard Ejecutivo.
+# - Próximas Mantenciones en una fila uniforme por equipo.
+# =========================================================
+st.markdown(
+    """
+<style>
+/* Baja el bloque Distribución de Costos para que no se monte sobre los KPI */
+.dashboard-costos-spacer {
+    height: 18px !important;
+    display: block !important;
+}
+.dashboard-costos-title,
+.panel-title.chart-title.dashboard-costos-title {
+    margin-top: 4px !important;
+    margin-bottom: 12px !important;
+    line-height: 1.18 !important;
+    position: relative !important;
+    z-index: 30 !important;
+}
+
+/* Contenedor de Próximas Mantenciones del Dashboard */
+.dashboard-proximas,
+.proximas-box {
+    padding: 14px 16px !important;
+    border-radius: 18px !important;
+    background: rgba(255,255,255,.70) !important;
+    overflow: visible !important;
+}
+.dashboard-proximas .panel-title,
+.proximas-box .panel-title {
+    margin: 0 0 10px 0 !important;
+    padding: 0 0 6px 0 !important;
+    min-height: 28px !important;
+    line-height: 1.18 !important;
+    clear: both !important;
+}
+
+/* Fila por equipo: equipo | actual | próxima | saldo */
+.dashboard-proximas .next-row-v65,
+.proximas-box .next-row-v65,
+.dashboard-proximas .next-item.next-row-v65,
+.proximas-box .next-item.next-row-v65 {
+    display: grid !important;
+    grid-template-columns: minmax(118px, .95fr) minmax(120px, 1fr) minmax(128px, 1fr) 104px !important;
+    align-items: center !important;
+    column-gap: 8px !important;
+    min-height: 48px !important;
+    padding: 7px 0 !important;
+    margin: 0 !important;
+    border-bottom: 1px solid rgba(100,116,139,.22) !important;
+    box-sizing: border-box !important;
+}
+.dashboard-proximas .next-row-v65:last-child,
+.proximas-box .next-row-v65:last-child {
+    border-bottom: 0 !important;
+}
+.dashboard-proximas .next-equipo-block,
+.proximas-box .next-equipo-block {
+    min-width: 0 !important;
+    overflow: hidden !important;
+}
+.dashboard-proximas .next-row-v65 .next-title,
+.proximas-box .next-row-v65 .next-title {
+    font-size: 12.9px !important;
+    line-height: 1.08 !important;
+    font-weight: 950 !important;
+    color: #0f172a !important;
+    margin: 0 0 3px 0 !important;
+    padding: 0 !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+}
+.dashboard-proximas .next-row-v65 .next-frequency,
+.proximas-box .next-row-v65 .next-frequency {
+    font-size: 10.2px !important;
+    line-height: 1.05 !important;
+    font-weight: 800 !important;
+    color: #475569 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+}
+.dashboard-proximas .next-metric-box,
+.proximas-box .next-metric-box {
+    display: grid !important;
+    grid-template-columns: 42px minmax(0, 1fr) !important;
+    align-items: center !important;
+    gap: 4px !important;
+    background: rgba(248,250,252,.72) !important;
+    border: 1px solid rgba(148,163,184,.24) !important;
+    border-radius: 9px !important;
+    padding: 4px 6px !important;
+    min-height: 30px !important;
+    box-sizing: border-box !important;
+}
+.dashboard-proximas .next-row-v65 .next-label,
+.proximas-box .next-row-v65 .next-label {
+    color: #475569 !important;
+    font-size: 9.7px !important;
+    line-height: 1 !important;
+    font-weight: 950 !important;
+    text-transform: uppercase !important;
+    letter-spacing: .10px !important;
+}
+.dashboard-proximas .next-row-v65 .next-value,
+.proximas-box .next-row-v65 .next-value {
+    color: #0f172a !important;
+    font-size: 11.2px !important;
+    line-height: 1.05 !important;
+    font-weight: 900 !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+}
+.dashboard-proximas .next-row-v65 .badge-days,
+.proximas-box .next-row-v65 .badge-days {
+    width: 104px !important;
+    min-width: 104px !important;
+    max-width: 104px !important;
+    min-height: 30px !important;
+    padding: 5px 7px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    text-align: center !important;
+    font-size: 10.2px !important;
+    line-height: 1.08 !important;
+    font-weight: 950 !important;
+    border-radius: 999px !important;
+    white-space: normal !important;
+    box-sizing: border-box !important;
+}
+
+@media (max-width: 1500px) {
+    .dashboard-proximas .next-row-v65,
+    .proximas-box .next-row-v65,
+    .dashboard-proximas .next-item.next-row-v65,
+    .proximas-box .next-item.next-row-v65 {
+        grid-template-columns: minmax(105px, .9fr) minmax(96px, 1fr) minmax(102px, 1fr) 92px !important;
+        column-gap: 6px !important;
+        min-height: 48px !important;
+        padding: 7px 0 !important;
+    }
+    .dashboard-proximas .next-metric-box,
+    .proximas-box .next-metric-box {
+        grid-template-columns: 36px minmax(0, 1fr) !important;
+        padding: 4px 5px !important;
+    }
+    .dashboard-proximas .next-row-v65 .next-value,
+    .proximas-box .next-row-v65 .next-value {
+        font-size: 10.4px !important;
+    }
+    .dashboard-proximas .next-row-v65 .badge-days,
+    .proximas-box .next-row-v65 .badge-days {
+        width: 92px !important;
+        min-width: 92px !important;
+        max-width: 92px !important;
+        font-size: 9.3px !important;
+    }
+}
+</style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+# =========================================================
+# AJUSTE FINAL V6.6
+# - Distribución de Costos más abajo respecto a los KPI.
+# - Próximas Mantenciones: una fila limpia por equipo con Actual, Próxima y Faltan.
+# =========================================================
+st.markdown(
+    """
+<style>
+/* Más separación entre KPI superiores y Distribución de Costos */
+.dashboard-costos-spacer {
+    height: 42px !important;
+    min-height: 42px !important;
+    display: block !important;
+}
+.dashboard-costos-title,
+.panel-title.chart-title.dashboard-costos-title {
+    margin-top: 12px !important;
+    margin-bottom: 12px !important;
+    padding-top: 0 !important;
+    line-height: 1.20 !important;
+}
+
+/* Próximas Mantenciones Dashboard: fila final ordenada */
+.dashboard-proximas,
+.proximas-box {
+    padding: 12px 14px !important;
+    overflow: visible !important;
+}
+.dashboard-proximas .panel-title,
+.proximas-box .panel-title {
+    margin: 0 0 12px 0 !important;
+    padding: 0 0 6px 0 !important;
+    min-height: 28px !important;
+}
+.dashboard-proximas .next-row-v66,
+.proximas-box .next-row-v66,
+.dashboard-proximas .next-item.next-row-v66,
+.proximas-box .next-item.next-row-v66 {
+    display: grid !important;
+    grid-template-columns: minmax(110px, 0.72fr) minmax(145px, 1fr) 108px !important;
+    align-items: center !important;
+    column-gap: 10px !important;
+    min-height: 54px !important;
+    padding: 8px 0 !important;
+    margin: 0 !important;
+    border-bottom: 1px solid rgba(100,116,139,.24) !important;
+    box-sizing: border-box !important;
+}
+.dashboard-proximas .next-row-v66:last-child,
+.proximas-box .next-row-v66:last-child {
+    border-bottom: 0 !important;
+}
+.dashboard-proximas .next-equipo-v66,
+.proximas-box .next-equipo-v66,
+.dashboard-proximas .next-data-v66,
+.proximas-box .next-data-v66 {
+    min-width: 0 !important;
+    overflow: hidden !important;
+}
+.dashboard-proximas .next-row-v66 .next-title,
+.proximas-box .next-row-v66 .next-title {
+    font-size: 12.8px !important;
+    line-height: 1.08 !important;
+    font-weight: 950 !important;
+    color: #0f172a !important;
+    margin: 0 0 3px 0 !important;
+    padding: 0 !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+}
+.dashboard-proximas .next-row-v66 .next-frequency,
+.proximas-box .next-row-v66 .next-frequency {
+    font-size: 10.3px !important;
+    line-height: 1.08 !important;
+    font-weight: 800 !important;
+    color: #475569 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+}
+.dashboard-proximas .next-data-v66,
+.proximas-box .next-data-v66 {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    row-gap: 4px !important;
+    background: rgba(248,250,252,.62) !important;
+    border: 1px solid rgba(148,163,184,.22) !important;
+    border-radius: 10px !important;
+    padding: 6px 8px !important;
+    box-sizing: border-box !important;
+}
+.dashboard-proximas .next-kv-v66,
+.proximas-box .next-kv-v66 {
+    color: #0f172a !important;
+    font-size: 11.4px !important;
+    line-height: 1.08 !important;
+    font-weight: 850 !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+}
+.dashboard-proximas .next-kv-v66 span,
+.proximas-box .next-kv-v66 span {
+    color: #334155 !important;
+    font-weight: 950 !important;
+}
+.dashboard-proximas .next-badge-v66,
+.proximas-box .next-badge-v66,
+.dashboard-proximas .next-row-v66 .badge-days,
+.proximas-box .next-row-v66 .badge-days {
+    width: 108px !important;
+    min-width: 108px !important;
+    max-width: 108px !important;
+    min-height: 32px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    text-align: center !important;
+    font-size: 9.6px !important;
+    line-height: 1.10 !important;
+    font-weight: 950 !important;
+    padding: 5px 7px !important;
+    border-radius: 999px !important;
+    white-space: normal !important;
+    box-sizing: border-box !important;
+}
+
+@media (max-width: 1500px) {
+    .dashboard-costos-spacer {
+        height: 48px !important;
+        min-height: 48px !important;
+    }
+    .dashboard-proximas .next-row-v66,
+    .proximas-box .next-row-v66,
+    .dashboard-proximas .next-item.next-row-v66,
+    .proximas-box .next-item.next-row-v66 {
+        grid-template-columns: minmax(92px, 0.68fr) minmax(130px, 1fr) 92px !important;
+        column-gap: 7px !important;
+        min-height: 56px !important;
+        padding: 8px 0 !important;
+    }
+    .dashboard-proximas .next-row-v66 .next-title,
+    .proximas-box .next-row-v66 .next-title {
+        font-size: 11.8px !important;
+    }
+    .dashboard-proximas .next-row-v66 .next-frequency,
+    .proximas-box .next-row-v66 .next-frequency {
+        font-size: 9.6px !important;
+    }
+    .dashboard-proximas .next-data-v66,
+    .proximas-box .next-data-v66 {
+        padding: 5px 6px !important;
+        row-gap: 3px !important;
+    }
+    .dashboard-proximas .next-kv-v66,
+    .proximas-box .next-kv-v66 {
+        font-size: 10.5px !important;
+    }
+    .dashboard-proximas .next-badge-v66,
+    .proximas-box .next-badge-v66,
+    .dashboard-proximas .next-row-v66 .badge-days,
+    .proximas-box .next-row-v66 .badge-days {
+        width: 92px !important;
+        min-width: 92px !important;
+        max-width: 92px !important;
+        font-size: 8.8px !important;
+        padding: 5px 5px !important;
+    }
+}
+</style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+# =========================================================
+# AJUSTE FINAL V6.7
+# - Menú fijo: sin botón minimizar/expandir y sin controles nativos.
+# - Elimina barra blanca superior en Próximas Mantenciones.
+# - Próximas Mantenciones: una fila limpia por equipo, solo Actual/Próxima/Faltan.
+# =========================================================
+st.markdown(
+    """
+<style>
+:root {
+    --menu-panel-width: 280px !important;
+    --menu-inner-width: 248px !important;
+    --menu-panel-width-final: 280px !important;
+    --menu-inner-width-final: 248px !important;
+}
+section[data-testid="stSidebar"] {
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    transform: translateX(0px) !important;
+    width: var(--menu-panel-width) !important;
+    min-width: var(--menu-panel-width) !important;
+    max-width: var(--menu-panel-width) !important;
+}
+section[data-testid="stSidebar"] > div,
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+    width: var(--menu-panel-width) !important;
+    min-width: var(--menu-panel-width) !important;
+    max-width: var(--menu-panel-width) !important;
+}
+[data-testid="stAppViewContainer"] > .main,
+section.main,
+main {
+    margin-left: var(--menu-panel-width) !important;
+    width: calc(100vw - var(--menu-panel-width)) !important;
+    max-width: calc(100vw - var(--menu-panel-width)) !important;
+}
+section[data-testid="stSidebar"] .menu-toggle-wrap,
+section[data-testid="stSidebar"] .menu-fixed-spacer,
+[data-testid="stSidebarCollapseButton"],
+[data-testid="stSidebarCollapsedControl"],
+[data-testid="collapsedControl"],
+button[title="Collapse sidebar"],
+button[title="Close sidebar"],
+button[title="Open sidebar"],
+button[aria-label="Collapse sidebar"],
+button[aria-label="Close sidebar"],
+button[aria-label="Open sidebar"] {
+    display: none !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+    width: 0 !important;
+    height: 0 !important;
+    min-width: 0 !important;
+    min-height: 0 !important;
+    pointer-events: none !important;
+}
+section[data-testid="stSidebar"] .menu-text,
+section[data-testid="stSidebar"] .menu-footer-box,
+section[data-testid="stSidebar"] .menu-filter-area,
+section[data-testid="stSidebar"] .menu-botones-title {
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"] button,
+section[data-testid="stSidebar"] .menu-active-item {
+    justify-content: flex-start !important;
+    text-align: left !important;
+}
+.dashboard-proximas:not(.dashboard-proximas-v67):empty,
+.proximas-box:empty {
+    display: none !important;
+    height: 0 !important;
+    min-height: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    background: transparent !important;
+}
+.dashboard-proximas-v67 {
+    background: rgba(255,255,255,.72) !important;
+    border: 1px solid rgba(203,213,225,.72) !important;
+    border-radius: 16px !important;
+    padding: 10px 12px !important;
+    margin-top: 0 !important;
+    box-shadow: 0 10px 24px rgba(15,23,42,.045) !important;
+    overflow: visible !important;
+}
+.dashboard-proximas-v67 .proximas-title-v67 {
+    display: block !important;
+    margin: 0 0 8px 0 !important;
+    padding: 0 0 5px 0 !important;
+    min-height: 24px !important;
+    line-height: 1.15 !important;
+    font-size: clamp(18px, 1.05vw, 21px) !important;
+    font-weight: 950 !important;
+    color: #0f172a !important;
+}
+.next-list-v67 {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 0 !important;
+}
+.dashboard-proximas-v67 .next-row-v67 {
+    display: grid !important;
+    grid-template-columns: minmax(112px, .95fr) minmax(120px, 1fr) minmax(120px, 1fr) 116px !important;
+    align-items: center !important;
+    column-gap: 10px !important;
+    min-height: 42px !important;
+    padding: 7px 0 !important;
+    margin: 0 !important;
+    border-bottom: 1px solid rgba(100,116,139,.22) !important;
+    box-sizing: border-box !important;
+}
+.dashboard-proximas-v67 .next-row-v67:last-child {
+    border-bottom: 0 !important;
+}
+.dashboard-proximas-v67 .next-equipo-v67 {
+    color: #0f172a !important;
+    font-size: 12.5px !important;
+    line-height: 1.10 !important;
+    font-weight: 950 !important;
+    min-width: 0 !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+}
+.dashboard-proximas-v67 .next-actual-v67,
+.dashboard-proximas-v67 .next-proxima-v67 {
+    color: #0f172a !important;
+    font-size: 12.1px !important;
+    line-height: 1.10 !important;
+    font-weight: 850 !important;
+    min-width: 0 !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+}
+.dashboard-proximas-v67 .next-actual-v67 span,
+.dashboard-proximas-v67 .next-proxima-v67 span {
+    color: #334155 !important;
+    font-weight: 950 !important;
+}
+.dashboard-proximas-v67 .next-badge-v67,
+.dashboard-proximas-v67 .badge-days.next-badge-v67 {
+    width: 116px !important;
+    min-width: 116px !important;
+    max-width: 116px !important;
+    min-height: 30px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    text-align: center !important;
+    font-size: 9.4px !important;
+    line-height: 1.08 !important;
+    font-weight: 950 !important;
+    padding: 5px 7px !important;
+    border-radius: 999px !important;
+    white-space: normal !important;
+    box-sizing: border-box !important;
+}
+.proximas-empty-v68 {
+    color: #334155 !important;
+    font-size: 13px !important;
+    font-weight: 800 !important;
+    padding: 8px 0 !important;
+}
+@media (max-width: 1500px) {
+    .dashboard-proximas-v67 .next-row-v67 {
+        grid-template-columns: minmax(92px, .9fr) minmax(98px, 1fr) minmax(98px, 1fr) 100px !important;
+        column-gap: 7px !important;
+        min-height: 40px !important;
+        padding: 6px 0 !important;
+    }
+    .dashboard-proximas-v67 .next-equipo-v67 {
+        font-size: 11.3px !important;
+    }
+    .dashboard-proximas-v67 .next-actual-v67,
+    .dashboard-proximas-v67 .next-proxima-v67 {
+        font-size: 10.8px !important;
+    }
+    .dashboard-proximas-v67 .next-badge-v67,
+    .dashboard-proximas-v67 .badge-days.next-badge-v67 {
+        width: 100px !important;
+        min-width: 100px !important;
+        max-width: 100px !important;
+        font-size: 8.7px !important;
+        padding: 5px 5px !important;
+    }
+}
+</style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+# =========================================================
+# AJUSTE FINAL V6.8
+# - Próximas Mantenciones dashboard: sin texto Próxima, lectura actual bajo equipo.
+# - Badge naranjo/rojo siempre dentro del cuadro.
+# =========================================================
+st.markdown(
+    """
+<style>
+.dashboard-proximas-v68 {
+    background: rgba(255,255,255,.72) !important;
+    border: 1px solid rgba(203,213,225,.72) !important;
+    border-radius: 18px !important;
+    padding: 14px 16px 16px 16px !important;
+    margin-top: 0 !important;
+    box-shadow: 0 10px 24px rgba(15,23,42,.045) !important;
+    overflow: hidden !important;
+    box-sizing: border-box !important;
+    max-width: 100% !important;
+}
+.dashboard-proximas-v68 .proximas-title-v68 {
+    display: block !important;
+    margin: 0 0 12px 0 !important;
+    padding: 0 !important;
+    min-height: 26px !important;
+    line-height: 1.15 !important;
+    font-size: clamp(19px, 1.08vw, 22px) !important;
+    font-weight: 950 !important;
+    color: #0f172a !important;
+}
+.next-list-v68 {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    overflow: hidden !important;
+}
+.dashboard-proximas-v68 .next-row-v68,
+.dashboard-proximas-v68 .next-item.next-row-v68 {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) 128px !important;
+    align-items: center !important;
+    column-gap: 12px !important;
+    min-height: 52px !important;
+    padding: 8px 0 !important;
+    margin: 0 !important;
+    border-bottom: 1px solid rgba(100,116,139,.20) !important;
+    box-sizing: border-box !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    overflow: hidden !important;
+}
+.dashboard-proximas-v68 .next-row-v68:last-child {
+    border-bottom: 0 !important;
+}
+.dashboard-proximas-v68 .next-info-v68 {
+    min-width: 0 !important;
+    max-width: 100% !important;
+    overflow: hidden !important;
+}
+.dashboard-proximas-v68 .next-equipo-v68 {
+    color: #0f172a !important;
+    font-size: 13px !important;
+    line-height: 1.10 !important;
+    font-weight: 950 !important;
+    margin: 0 0 5px 0 !important;
+    padding: 0 !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+}
+.dashboard-proximas-v68 .next-actual-v68 {
+    color: #0f172a !important;
+    font-size: 12.2px !important;
+    line-height: 1.16 !important;
+    font-weight: 850 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+}
+.dashboard-proximas-v68 .next-actual-v68 span {
+    color: #334155 !important;
+    font-weight: 950 !important;
+}
+.dashboard-proximas-v68 .next-badge-v68,
+.dashboard-proximas-v68 .badge-days.next-badge-v68 {
+    justify-self: end !important;
+    width: 128px !important;
+    min-width: 128px !important;
+    max-width: 128px !important;
+    min-height: 32px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    text-align: center !important;
+    font-size: 9.3px !important;
+    line-height: 1.08 !important;
+    font-weight: 950 !important;
+    padding: 5px 8px !important;
+    border-radius: 999px !important;
+    white-space: normal !important;
+    box-sizing: border-box !important;
+    overflow-wrap: anywhere !important;
+}
+.proximas-empty-v68 {
+    color: #334155 !important;
+    font-size: 13px !important;
+    font-weight: 800 !important;
+    padding: 8px 0 !important;
+}
+@media (max-width: 1500px) {
+    .dashboard-proximas-v68 {
+        padding: 12px 12px 14px 12px !important;
+    }
+    .dashboard-proximas-v68 .next-row-v68,
+    .dashboard-proximas-v68 .next-item.next-row-v68 {
+        grid-template-columns: minmax(0, 1fr) 108px !important;
+        column-gap: 8px !important;
+        min-height: 50px !important;
+        padding: 7px 0 !important;
+    }
+    .dashboard-proximas-v68 .next-equipo-v68 {
+        font-size: 12px !important;
+    }
+    .dashboard-proximas-v68 .next-actual-v68 {
+        font-size: 11px !important;
+    }
+    .dashboard-proximas-v68 .next-badge-v68,
+    .dashboard-proximas-v68 .badge-days.next-badge-v68 {
+        width: 108px !important;
+        min-width: 108px !important;
+        max-width: 108px !important;
+        font-size: 8.4px !important;
+        padding: 5px 5px !important;
+    }
+}
+</style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# =========================================================
+# AJUSTE RESPONSIVE FINAL V7.0: TELÉFONOS SIN ALTERAR PC
+# - Solo se activa en teléfono vertical o teléfono horizontal.
+# - En PC se conservan íntegramente los estilos anteriores.
+# - El menú lateral pasa a ser superpuesto y plegable en móvil.
+# - Columnas, KPI, gráficos, tablas y tarjetas se reorganizan según el ancho.
+# =========================================================
+st.markdown(
+    """
+<style>
+/* =========================================================
+   TELÉFONO VERTICAL Y TELÉFONO HORIZONTAL
+   ========================================================= */
+@media (max-width: 768px),
+       (max-width: 1024px) and (orientation: landscape) and (max-height: 600px) {
+
+    :root {
+        --mobile-menu-width: min(86vw, 320px) !important;
+        --mobile-menu-inner: calc(min(86vw, 320px) - 24px) !important;
+        --mobile-padding-x: 10px !important;
     }
 
     html,
@@ -4440,3107 +11658,596 @@ section.main,
         overflow-x: hidden !important;
     }
 
-    /* En móvil, el menú lateral se transforma en una barra superior. */
-    [data-testid="stAppViewContainer"] {
+    /* El encabezado nativo queda transparente, pero permite mostrar el botón del menú. */
+    header[data-testid="stHeader"] {
         display: block !important;
-    }
-
-    section[data-testid="stSidebar"] {
-        position: sticky !important;
-        top: 0 !important;
-        left: 0 !important;
-        width: 100% !important;
-        min-width: 100% !important;
-        max-width: 100% !important;
-        height: auto !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        height: 0 !important;
         min-height: 0 !important;
-        max-height: none !important;
-        flex: none !important;
-        align-self: auto !important;
+        max-height: 0 !important;
+        background: transparent !important;
+        pointer-events: none !important;
         overflow: visible !important;
-        border-right: 0 !important;
-        border-bottom: 1px solid rgba(134,239,172,.32) !important;
-        box-shadow: 0 8px 22px rgba(0,0,0,.30) !important;
-        z-index: 9999 !important;
+        z-index: 100001 !important;
     }
 
-    section[data-testid="stSidebar"] > div,
-    section[data-testid="stSidebar"] [data-testid="stSidebarContent"],
-    section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
-        width: 100% !important;
-        max-width: 100% !important;
-        height: auto !important;
-        min-height: 0 !important;
-        overflow: visible !important;
-        box-sizing: border-box !important;
-    }
-
-    section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
-        padding: 6px 8px 7px 8px !important;
-    }
-
-    .menu-brand {
-        min-height: 38px !important;
-        gap: 7px !important;
-        padding: 0 2px 5px 2px !important;
-        margin: 0 0 5px 0 !important;
-    }
-
-    .menu-logo-shell {
-        width: 35px !important;
-        height: 35px !important;
-        min-width: 35px !important;
-    }
-
-    .menu-title {
-        font-size: 10.5px !important;
-        line-height: 1.08 !important;
-    }
-
-    .menu-subtitle {
-        font-size: 8.2px !important;
-        margin-top: 2px !important;
-    }
-
-    /* Navegación horizontal desplazable con el dedo. */
-    section[data-testid="stSidebar"] div[role="radiogroup"] {
-        display: flex !important;
-        flex-direction: row !important;
-        flex-wrap: nowrap !important;
-        align-items: stretch !important;
-        gap: 6px !important;
-        width: 100% !important;
-        padding: 0 0 4px 0 !important;
-        margin: 0 !important;
-        overflow-x: auto !important;
-        overflow-y: hidden !important;
-        scroll-snap-type: x proximity;
-        -webkit-overflow-scrolling: touch;
-        scrollbar-width: thin !important;
-    }
-
-    section[data-testid="stSidebar"] div[role="radiogroup"]::-webkit-scrollbar {
-        height: 4px;
-    }
-
-    section[data-testid="stSidebar"] div[role="radiogroup"]::-webkit-scrollbar-thumb {
-        background: rgba(167,243,208,.48);
-        border-radius: 999px;
-    }
-
-    section[data-testid="stSidebar"] div[role="radiogroup"] label {
-        flex: 0 0 auto !important;
-        width: auto !important;
-        min-width: 145px !important;
-        max-width: none !important;
-        min-height: 38px !important;
-        padding: 6px 9px !important;
-        margin: 0 !important;
-        border-radius: 11px !important;
-        scroll-snap-align: start;
-    }
-
-    section[data-testid="stSidebar"] div[role="radiogroup"] p {
-        width: auto !important;
-        font-size: 10.4px !important;
-        line-height: 1.1 !important;
-        white-space: nowrap !important;
-    }
-
-    /* La información contractual queda disponible en escritorio y se oculta
-       en teléfono para priorizar el contenido operativo. */
-    .menu-footer-box,
-    .sidebar-filter-title {
+    header[data-testid="stHeader"] [data-testid="stToolbar"],
+    header[data-testid="stHeader"] [data-testid="stDecoration"],
+    header[data-testid="stHeader"] [data-testid="stDeployButton"] {
         display: none !important;
     }
 
-    [data-testid="stAppViewContainer"] > .main,
-    [data-testid="stAppViewContainer"] > section[data-testid="stMain"] {
-        display: block !important;
-        width: 100% !important;
-        max-width: 100% !important;
-        min-width: 0 !important;
-        margin: 0 !important;
+    /* Menú lateral móvil: se superpone y no resta ancho al contenido. */
+    section[data-testid="stSidebar"] {
+        position: fixed !important;
+        top: 0 !important;
+        left: 0 !important;
+        bottom: 0 !important;
+        width: var(--mobile-menu-width) !important;
+        min-width: var(--mobile-menu-width) !important;
+        max-width: var(--mobile-menu-width) !important;
+        height: 100vh !important;
+        height: 100dvh !important;
+        z-index: 100000 !important;
+        overflow-x: hidden !important;
+        overflow-y: auto !important;
+        box-shadow: 12px 0 28px rgba(15, 23, 42, .42) !important;
+        transition: transform .22s ease !important;
+    }
+
+    section[data-testid="stSidebar"] > div,
+    section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+        width: var(--mobile-menu-width) !important;
+        min-width: var(--mobile-menu-width) !important;
+        max-width: var(--mobile-menu-width) !important;
+        min-height: 100dvh !important;
+        padding: 12px !important;
+        box-sizing: border-box !important;
         overflow-x: hidden !important;
     }
 
-    .main .block-container,
-    [data-testid="stMain"] .block-container,
-    [data-testid="stMainBlockContainer"] {
-        width: 100% !important;
-        max-width: 100% !important;
+    section[data-testid="stSidebar"] .menu-panel-content,
+    section[data-testid="stSidebar"] .menu-brand,
+    section[data-testid="stSidebar"] .menu-line,
+    section[data-testid="stSidebar"] .menu-footer-box,
+    section[data-testid="stSidebar"] .menu-filter-area,
+    section[data-testid="stSidebar"] div[data-testid="stButton"],
+    section[data-testid="stSidebar"] div[data-testid="stSelectbox"],
+    section[data-testid="stSidebar"] [data-baseweb="select"],
+    section[data-testid="stSidebar"] [data-baseweb="select"] > div,
+    section[data-testid="stSidebar"] .menu-active-item,
+    section[data-testid="stSidebar"] div[data-testid="stButton"] button {
+        width: var(--mobile-menu-inner) !important;
         min-width: 0 !important;
-        padding: .7rem .65rem 1.1rem .65rem !important;
-        margin: 0 !important;
+        max-width: var(--mobile-menu-inner) !important;
         box-sizing: border-box !important;
     }
 
-    /* Encabezado legible: en escritorio continúa en una sola línea. */
-    .app-topbar {
-        display: block !important;
-        margin-bottom: 9px !important;
+    section[data-testid="stSidebar"] div[data-testid="stButton"] button,
+    section[data-testid="stSidebar"] .menu-active-item {
+        min-height: 46px !important;
+        height: auto !important;
+        padding: 10px 11px !important;
+        font-size: 14px !important;
+        line-height: 1.15 !important;
+        white-space: normal !important;
+        overflow: visible !important;
+        text-overflow: clip !important;
     }
 
-    .title-main {
+    /* Respeta el estado abierto/cerrado real de Streamlit. */
+    section[data-testid="stSidebar"][aria-expanded="false"] {
+        transform: translateX(-105%) !important;
+        visibility: hidden !important;
+        pointer-events: none !important;
+    }
+
+    section[data-testid="stSidebar"][aria-expanded="true"] {
+        transform: translateX(0) !important;
+        visibility: visible !important;
+        pointer-events: auto !important;
+    }
+
+    /* Botones nativos para abrir y cerrar el menú en el teléfono. */
+    [data-testid="stSidebarCollapsedControl"],
+    [data-testid="collapsedControl"] {
+        display: flex !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        pointer-events: auto !important;
+        position: fixed !important;
+        top: 9px !important;
+        left: 9px !important;
+        width: 40px !important;
+        min-width: 40px !important;
+        height: 40px !important;
+        min-height: 40px !important;
+        align-items: center !important;
+        justify-content: center !important;
+        border-radius: 12px !important;
+        background: #2563eb !important;
+        border: 2px solid #ffffff !important;
+        box-shadow: 0 7px 18px rgba(15, 23, 42, .32) !important;
+        z-index: 100003 !important;
+    }
+
+    [data-testid="stSidebarCollapsedControl"] button,
+    [data-testid="collapsedControl"] button,
+    button[kind="header"],
+    button[title="Open sidebar"],
+    button[aria-label="Open sidebar"] {
+        display: flex !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        pointer-events: auto !important;
+        width: 40px !important;
+        min-width: 40px !important;
+        max-width: 40px !important;
+        height: 40px !important;
+        min-height: 40px !important;
+        max-height: 40px !important;
+        padding: 0 !important;
+        align-items: center !important;
+        justify-content: center !important;
+        border-radius: 12px !important;
+        background: #2563eb !important;
+        color: #ffffff !important;
+    }
+
+    [data-testid="stSidebarCollapseButton"],
+    button[title="Collapse sidebar"],
+    button[title="Close sidebar"],
+    button[aria-label="Collapse sidebar"],
+    button[aria-label="Close sidebar"] {
+        display: flex !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        pointer-events: auto !important;
+        position: fixed !important;
+        top: 9px !important;
+        left: calc(var(--mobile-menu-width) - 50px) !important;
+        width: 40px !important;
+        min-width: 40px !important;
+        height: 40px !important;
+        min-height: 40px !important;
+        align-items: center !important;
+        justify-content: center !important;
+        border-radius: 12px !important;
+        background: #2563eb !important;
+        border: 2px solid #ffffff !important;
+        box-shadow: 0 7px 18px rgba(15, 23, 42, .32) !important;
+        z-index: 100004 !important;
+    }
+
+    [data-testid="stSidebarCollapsedControl"] svg,
+    [data-testid="collapsedControl"] svg,
+    [data-testid="stSidebarCollapseButton"] svg,
+    button[title="Collapse sidebar"] svg,
+    button[title="Close sidebar"] svg,
+    button[title="Open sidebar"] svg,
+    button[aria-label="Collapse sidebar"] svg,
+    button[aria-label="Close sidebar"] svg,
+    button[aria-label="Open sidebar"] svg {
+        color: #ffffff !important;
+        fill: #ffffff !important;
+        stroke: #ffffff !important;
+    }
+
+    /* En móvil el contenido ocupa la pantalla completa. */
+    [data-testid="stAppViewContainer"] > .main,
+    div[data-testid="stMain"],
+    section.main,
+    main {
+        margin-left: 0 !important;
+        width: 100vw !important;
+        min-width: 0 !important;
+        max-width: 100vw !important;
+        overflow-x: hidden !important;
+        box-sizing: border-box !important;
+    }
+
+    .main .block-container,
+    .block-container,
+    div[data-testid="stMainBlockContainer"],
+    section.main > div {
         width: 100% !important;
+        min-width: 0 !important;
         max-width: 100% !important;
-        font-size: clamp(17px, 5.4vw, 23px) !important;
-        line-height: 1.10 !important;
-        letter-spacing: -.45px !important;
+        margin: 0 !important;
+        padding: 58px var(--mobile-padding-x) 22px var(--mobile-padding-x) !important;
+        overflow-x: hidden !important;
+        box-sizing: border-box !important;
+    }
+
+    .saivam-marca-principal,
+    .stApp::before {
+        left: 0 !important;
+        width: 100vw !important;
+        max-width: 100vw !important;
+        background-size: min(72vw, 360px) auto !important;
+    }
+
+    /* Encabezado principal más compacto y sin cortes. */
+    .main-fixed-header,
+    .header-principal {
+        width: 100% !important;
+        min-height: 56px !important;
+        height: auto !important;
+        margin: 0 0 10px 0 !important;
+        padding: 0 !important;
+        display: grid !important;
+        grid-template-columns: minmax(0, 1fr) auto !important;
+        align-items: end !important;
+        gap: 8px !important;
+        overflow: visible !important;
+    }
+
+    .main-fixed-title,
+    .title-main {
+        max-width: 100% !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        font-size: clamp(21px, 6.2vw, 29px) !important;
+        line-height: 1.08 !important;
+        white-space: normal !important;
+        overflow: visible !important;
+        overflow-wrap: anywhere !important;
+        text-overflow: clip !important;
+    }
+
+    .main-fixed-logo,
+    .header-logo-box {
+        min-width: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        align-self: end !important;
+    }
+
+    .main-fixed-logo img,
+    .header-logo-box img {
+        width: 82px !important;
+        min-width: 0 !important;
+        max-width: 82px !important;
+        height: auto !important;
+        object-fit: contain !important;
+    }
+
+    .main-fixed-header-spacer,
+    .header-separador {
+        height: 2px !important;
+        min-height: 2px !important;
+        max-height: 2px !important;
+        margin: 0 !important;
+    }
+
+    /* Streamlit no debe mantener filas rígidas de escritorio. */
+    [data-testid="stHorizontalBlock"] {
+        width: 100% !important;
+        min-width: 0 !important;
+        max-width: 100% !important;
+        display: flex !important;
+        flex-wrap: wrap !important;
+        align-items: stretch !important;
+        gap: .65rem !important;
+    }
+
+    [data-testid="stHorizontalBlock"] > [data-testid="column"] {
+        flex: 1 1 100% !important;
+        width: 100% !important;
+        min-width: 0 !important;
+        max-width: 100% !important;
+    }
+
+    /* KPI: dos por fila en teléfono vertical. */
+    [data-testid="stHorizontalBlock"]:has(.kpi-card) > [data-testid="column"] {
+        flex: 1 1 calc(50% - .34rem) !important;
+        width: calc(50% - .34rem) !important;
+        max-width: calc(50% - .34rem) !important;
+    }
+
+    .kpi-card {
+        width: 100% !important;
+        min-width: 0 !important;
+        min-height: 112px !important;
+        padding: 12px !important;
+        border-radius: 15px !important;
+        overflow: hidden !important;
+    }
+
+    .kpi-icon {
+        width: 38px !important;
+        height: 38px !important;
+        margin-bottom: 7px !important;
+        font-size: 19px !important;
+    }
+
+    .kpi-title {
+        font-size: 10.5px !important;
+        line-height: 1.15 !important;
+        overflow-wrap: anywhere !important;
+    }
+
+    .kpi-value {
+        font-size: clamp(18px, 5.4vw, 24px) !important;
+        line-height: 1.05 !important;
+        overflow-wrap: anywhere !important;
+    }
+
+    .kpi-sub {
+        font-size: 9.8px !important;
+        line-height: 1.18 !important;
+        overflow-wrap: anywhere !important;
+    }
+
+    .panel-title,
+    .page-section-title,
+    .chart-title,
+    .proximas-title-v68 {
+        min-height: 0 !important;
+        margin-top: 12px !important;
+        margin-bottom: 8px !important;
+        padding-top: 2px !important;
+        font-size: clamp(17px, 5vw, 21px) !important;
+        line-height: 1.18 !important;
         white-space: normal !important;
         overflow-wrap: anywhere !important;
     }
 
-    .subtitle-main {
-        width: 100% !important;
-        max-width: 100% !important;
-        margin-top: 5px !important;
-        font-size: 11px !important;
-        line-height: 1.35 !important;
+    .panel-subtitle {
+        font-size: 13px !important;
+        line-height: 1.28 !important;
     }
 
-    .main-logo-card {
-        display: none !important;
-    }
-
-    .panel-title {
-        font-size: 18px !important;
-        line-height: 1.16 !important;
-        margin-top: 12px !important;
-    }
-
-    /* Las columnas de Streamlit se apilan solo en móvil. */
-    [data-testid="stMain"] [data-testid="stHorizontalBlock"] {
-        display: flex !important;
-        flex-direction: column !important;
-        flex-wrap: nowrap !important;
-        gap: .7rem !important;
-        width: 100% !important;
-    }
-
-    [data-testid="stMain"] [data-testid="column"] {
-        flex: 1 1 100% !important;
-        width: 100% !important;
-        min-width: 100% !important;
-        max-width: 100% !important;
-    }
-
-    .kpi-card {
-        min-height: 0 !important;
-        padding: 13px 14px !important;
-        border-radius: 15px !important;
-    }
-
-    .kpi-icon {
-        width: 46px !important;
-        height: 46px !important;
-        border-radius: 14px !important;
-        font-size: 23px !important;
-        margin-bottom: 8px !important;
-    }
-
-    .kpi-value {
-        font-size: 23px !important;
-        margin-top: 5px !important;
-    }
-
-    .kpi-sub {
-        margin-top: 6px !important;
-    }
-
+    /* Gráficos contenidos y legibles. */
     [data-testid="stPlotlyChart"],
-    [data-testid="stDataFrame"],
-    div[data-testid="stVerticalBlockBorderWrapper"] {
+    .js-plotly-plot,
+    .plot-container,
+    .svg-container {
         width: 100% !important;
-        max-width: 100% !important;
         min-width: 0 !important;
+        max-width: 100% !important;
+        overflow: hidden !important;
         box-sizing: border-box !important;
     }
 
-    /* Las tablas extensas conservan sus columnas y permiten desplazamiento
-       horizontal, evitando que el texto quede ilegible. */
-    .tabla-general-wrap,
-    .cert-table-wrap {
+    [data-testid="stPlotlyChart"] {
+        min-height: 260px !important;
+        border-radius: 13px !important;
+    }
+
+    /* Tablas HTML: desplazamiento horizontal táctil en vez de comprimir columnas. */
+    .tabla-clara-wrap {
         width: 100% !important;
         max-width: 100% !important;
+        margin-top: 7px !important;
         overflow-x: auto !important;
-        -webkit-overflow-scrolling: touch;
+        overflow-y: auto !important;
+        -webkit-overflow-scrolling: touch !important;
+        overscroll-behavior-inline: contain !important;
+        border-radius: 13px !important;
     }
 
-    .tabla-general-wrap table,
-    .cert-table-wrap table {
-        min-width: 760px !important;
+    .tabla-clara {
+        width: max-content !important;
+        min-width: 720px !important;
+        table-layout: auto !important;
+        font-size: 10.5px !important;
     }
 
-    .recognition-photo-card {
+    .tabla-clara thead th,
+    .tabla-clara tbody td {
+        min-width: 92px !important;
+        padding: 7px 8px !important;
+        line-height: 1.22 !important;
+        white-space: normal !important;
+        overflow-wrap: normal !important;
+        word-break: normal !important;
+    }
+
+    [data-testid="stDataFrame"],
+    [data-testid="stTable"] {
         width: 100% !important;
-        border-radius: 14px !important;
+        min-width: 0 !important;
+        max-width: 100% !important;
+        overflow-x: auto !important;
+        -webkit-overflow-scrolling: touch !important;
     }
 
-    .recognition-photo-img {
+    /* Tarjetas de equipos en una columna en teléfono vertical. */
+    [data-testid="stHorizontalBlock"]:has(.equipo-card) > [data-testid="column"] {
+        flex: 1 1 100% !important;
         width: 100% !important;
-        height: auto !important;
-        max-height: 68vh !important;
-        object-fit: contain !important;
+        max-width: 100% !important;
     }
 
-    /* Los sellos de agua pasan a ocupar todo el ancho del teléfono. */
-    .panel-watermark-layer,
-    .saivam-page-watermark-layer,
-    .cumplimientos-watermark-layer,
-    .recognition-watermark-layer,
-    .certification-watermark-layer {
-        left: 0 !important;
-        right: 0 !important;
-        width: 100vw !important;
-        max-width: 100vw !important;
+    .equipo-card {
+        width: 100% !important;
+        min-width: 0 !important;
+        max-width: 100% !important;
+        padding: 12px !important;
+        overflow: hidden !important;
     }
 
-    .footer-app {
-        margin-top: 18px !important;
-        padding: 0 6px !important;
-        font-size: 9.5px !important;
+    .equipo-img,
+    .equipo-img-placeholder {
+        width: 100% !important;
+        height: 160px !important;
+        min-height: 160px !important;
+        object-fit: cover !important;
+    }
+
+    /* Próximas mantenciones: texto y estado se apilan para evitar cortes. */
+    .dashboard-proximas-v68 {
+        width: 100% !important;
+        max-width: 100% !important;
+        padding: 12px !important;
+        overflow: hidden !important;
+    }
+
+    .dashboard-proximas-v68 .next-row-v68,
+    .dashboard-proximas-v68 .next-item.next-row-v68 {
+        grid-template-columns: minmax(0, 1fr) !important;
+        row-gap: 7px !important;
+        min-height: 0 !important;
+        padding: 10px 0 !important;
+        overflow: visible !important;
+    }
+
+    .dashboard-proximas-v68 .next-badge-v68,
+    .dashboard-proximas-v68 .badge-days.next-badge-v68 {
+        justify-self: start !important;
+        width: auto !important;
+        min-width: 110px !important;
+        max-width: 100% !important;
+        font-size: 9px !important;
+        padding: 6px 9px !important;
+    }
+
+    .dashboard-proximas-v68 .next-equipo-v68 {
+        font-size: 12.5px !important;
+    }
+
+    .dashboard-proximas-v68 .next-actual-v68 {
+        font-size: 11.5px !important;
+    }
+
+    .dashboard-costos-spacer {
+        height: 7px !important;
+    }
+
+    div[data-testid="stVerticalBlock"] {
+        gap: .42rem !important;
+    }
+
+    footer,
+    .stApp footer {
+        max-width: 100% !important;
     }
 }
 
-</style>
-    """
-    css = css.replace("__FONDO__", fondo_css)
-    st.markdown(css, unsafe_allow_html=True)
-
-
-def kpi_card(icono, titulo, valor, subtitulo=""):
-    tonos = {
-        "🛡️": "azul",
-        "👷": "verde",
-        "✅": "morado",
-        "⚠️": "ambar",
-        "🚨": "rojo",
-        "📋": "azul",
-        "📈": "verde",
-        "🎓": "morado",
-        "🦺": "ambar",
-        "🔒": "celeste",
-        "📁": "azul",
-        "📦": "verde",
-        "👥": "celeste",
-        "🟢": "verde",
-        "🟠": "ambar",
-        "🔴": "rojo",
-        "🔎": "azul",
-        "📝": "morado",
-        "📌": "ambar",
-        "📜": "celeste",
-        "🏆": "ambar",
-        "🏢": "verde",
-        "🗂️": "celeste",
-        "❌": "rojo",
-    }
-    tono = tonos.get(icono, "azul")
-    st.markdown(
-        f"""
-<div class="kpi-card notranslate" translate="no">
-    <div class="kpi-icon {tono}" translate="no">{icono}</div>
-    <div class="kpi-title notranslate" translate="no">{escape_html(titulo)}</div>
-    <div class="kpi-value notranslate" translate="no">{escape_html(valor)}</div>
-    <div class="kpi-sub notranslate" translate="no">{escape_html(subtitulo)}</div>
-</div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def badge_estado(estado):
-    estado_norm = normalizar_texto(estado)
-    clase = "badge-neutro"
-    if "cerr" in estado_norm or "cumpl" in estado_norm or "vigente" in estado_norm or "realiz" in estado_norm:
-        clase = "badge-ok"
-    elif "proceso" in estado_norm:
-        clase = "badge-proceso"
-    elif "pend" in estado_norm or "abiert" in estado_norm:
-        clase = "badge-pendiente"
-    elif "venc" in estado_norm or "no_cumple" in estado_norm:
-        clase = "badge-vencida"
-    return f"<span class='badge {clase}'>{escape_html(estado)}</span>"
-
-
-def panel_titulo(texto):
-    st.markdown(f"<div class='panel-title'>{texto}</div>", unsafe_allow_html=True)
-
-
-def card_inicio():
-    st.markdown("<div class='panel-card'>", unsafe_allow_html=True)
-
-
-def card_fin():
-    st.markdown("</div>", unsafe_allow_html=True)
-
-
-# =========================================================
-# GRÁFICOS
-# =========================================================
-
-PALETA_VERDE = ["#70D6A0", "#087B5B", "#35B779", "#A8E3C0", "#0B5D46", "#C9EED7"]
-
-
-def aplicar_layout_fig(fig, height=360):
-    fig.update_layout(
-        title=dict(text=""),
-        height=height,
-        margin=dict(l=12, r=12, t=24, b=16),
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(255,255,255,0)",
-        font=dict(color="#D1FAE5", size=12),
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=-0.24,
-            xanchor="center",
-            x=0.5,
-            bgcolor="rgba(1,8,6,.34)",
-            font=dict(color="#D1FAE5"),
-        ),
-        hoverlabel=dict(bgcolor="#06100D", font_color="#F4FFF9", bordercolor="#34D399"),
-    )
-    fig.update_xaxes(showgrid=True, gridcolor="rgba(110,231,183,.16)", zeroline=False, color="#C9F7E3")
-    fig.update_yaxes(showgrid=True, gridcolor="rgba(110,231,183,.16)", zeroline=False, color="#C9F7E3")
-    return fig
-
-
-def grafico_barra(df, columna, titulo, orientacion="v", top=12):
-    if df is None or df.empty or columna not in df.columns:
-        st.info("Sin datos para graficar.")
-        return
-    base = df.copy()
-    base[columna] = base[columna].fillna("Sin dato").astype(str).replace("", "Sin dato")
-    conteo = base[columna].value_counts().reset_index()
-    conteo.columns = [columna, "Cantidad"]
-    conteo = conteo.head(top)
-    if orientacion == "h":
-        fig = px.bar(conteo.sort_values("Cantidad"), x="Cantidad", y=columna, orientation="h", title=titulo, text="Cantidad")
-    else:
-        fig = px.bar(conteo, x=columna, y="Cantidad", title=titulo, text="Cantidad")
-    fig.update_traces(textposition="outside", marker_color="#62C990")
-    st.plotly_chart(aplicar_layout_fig(fig), use_container_width=True)
-
-
-def grafico_donut(df, columna, titulo):
-    if df is None or df.empty or columna not in df.columns:
-        st.info("Sin datos para graficar.")
-        return
-    base = df.copy()
-    base[columna] = base[columna].fillna("Sin dato").astype(str).replace("", "Sin dato")
-    conteo = base[columna].value_counts().reset_index()
-    conteo.columns = [columna, "Cantidad"]
-    fig = px.pie(conteo, names=columna, values="Cantidad", title=titulo, hole=0.48, color_discrete_sequence=PALETA_VERDE)
-    fig.update_traces(textinfo="percent+label")
-    st.plotly_chart(aplicar_layout_fig(fig), use_container_width=True)
-
-
-def grafico_tendencia(df, titulo):
-    if df is None or df.empty or "Fecha" not in df.columns:
-        st.info("Sin datos para graficar.")
-        return
-    base = df.copy()
-    base["Fecha"] = base["Fecha"].apply(convertir_fecha)
-    base = base[base["Fecha"].notna()].copy()
-    if base.empty:
-        st.info("Sin fechas válidas para graficar.")
-        return
-    base["Periodo_Mes"] = base["Fecha"].dt.to_period("M").dt.to_timestamp()
-    conteo = base.groupby("Periodo_Mes", as_index=False).size()
-    conteo = conteo.rename(columns={"size": "Cantidad"})
-    fig = px.line(conteo, x="Periodo_Mes", y="Cantidad", title=titulo, markers=True, color_discrete_sequence=PALETA_VERDE)
-    fig.update_xaxes(title="Mes")
-    fig.update_yaxes(title="Cantidad")
-    st.plotly_chart(aplicar_layout_fig(fig), use_container_width=True)
-
-
-# =========================================================
-# PÁGINAS
-# =========================================================
-
-def resumen_mensual_cumplimientos(df):
-    filas = []
-    for mes in MESES_CORTOS:
-        meta = pd.to_numeric(df.get(mes, 0), errors="coerce").fillna(0).sum()
-        real = pd.to_numeric(df.get(f"RE_{mes}", 0), errors="coerce").fillna(0).sum()
-        cumplimiento = (real / meta * 100) if meta > 0 else 0
-        filas.append({"Mes": mes, "Meta": meta, "Realizadas": real, "Cumplimiento": cumplimiento})
-    return pd.DataFrame(filas)
-
-
-def pagina_panel_general(datos, filtros):
-    sello_agua = obtener_sello_agua_html()
-    if sello_agua:
-        st.markdown(sello_agua, unsafe_allow_html=True)
-
-    cumplimiento_df = datos.get("Cumplimientos_SSO", pd.DataFrame()).copy()
-    incidentes = datos.get("Incidentes", pd.DataFrame()).copy()
-    capacitaciones = datos.get("Capacitaciones", pd.DataFrame()).copy()
-    config = datos.get("Configuracion", pd.DataFrame())
-
-    dias, fecha_inicio = dias_sin_accidentes(config, incidentes)
-    resumen = resumen_mensual_cumplimientos(cumplimiento_df) if not cumplimiento_df.empty else pd.DataFrame()
-    resumen_corte = (
-        resumen[resumen["Mes"].isin(MESES_CUMPLIMIENTOS)].copy()
-        if not resumen.empty
-        else pd.DataFrame()
-    )
-
-    # Todos los KPI de cumplimiento del panel general usan el mismo corte
-    # oficial que la página Cumplimientos SSO: enero a julio de 2026.
-    meta_corte = float(resumen_corte["Meta"].sum()) if not resumen_corte.empty else 0
-    real_corte = float(resumen_corte["Realizadas"].sum()) if not resumen_corte.empty else 0
-    porc_corte = (real_corte / meta_corte * 100) if meta_corte else 0
-    observadores = cumplimiento_df["Observador"].nunique() if not cumplimiento_df.empty else 0
-
-    accidentes = 0
-    if not incidentes.empty and "Tipo_Evento" in incidentes.columns:
-        tipos = incidentes["Tipo_Evento"].apply(normalizar_texto)
-        accidentes = int((tipos.str.contains("accidente", na=False) & ~tipos.str.contains("cuasi", na=False)).sum())
-
-    c1, c2, c3, c4, c5 = st.columns(5, gap="medium")
-    with c1:
-        kpi_card("🛡️", "Días sin accidentes", numero(dias), f"Desde {fecha_texto(fecha_inicio)}")
-    with c2:
-        kpi_card("👷", "Observadores", numero(observadores), "Personas con meta asignada")
-    with c3:
-        kpi_card("✅", "Actividades realizadas", numero(real_corte), f"Meta ene-jul: {numero(meta_corte)}")
-    with c4:
-        kpi_card("📈", "% cumplimiento", f"{porc_corte:.0f}%", PERIODO_CUMPLIMIENTOS)
-    with c5:
-        kpi_card("🚨", "Accidentes registrados", numero(accidentes), "Registros del año")
-
-    col1, col2 = st.columns([1.15, 1], gap="large")
-    with col1:
-        panel_titulo("Meta versus resultado mensual")
-        if resumen.empty:
-            st.info("Sin datos en la hoja Cumplimientos SSO.")
-        else:
-            fig = go.Figure()
-            fig.add_bar(x=resumen_corte["Mes"], y=resumen_corte["Meta"], name="Meta")
-            fig.add_bar(x=resumen_corte["Mes"], y=resumen_corte["Realizadas"], name="Realizadas")
-            fig.update_layout(barmode="group", xaxis_title="Mes", yaxis_title="Cantidad")
-            st.plotly_chart(aplicar_layout_fig(fig, height=390), use_container_width=True)
-
-    with col2:
-        panel_titulo("Cumplimiento mensual")
-        if resumen.empty:
-            st.info("Sin datos para graficar.")
-        else:
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(
-                x=resumen_corte["Mes"], y=resumen_corte["Cumplimiento"],
-                mode="lines+markers+text",
-                text=[f"{v:.0f}%" for v in resumen_corte["Cumplimiento"]],
-                textposition="top center", name="Cumplimiento",
-            ))
-            fig.add_hline(y=100, line_dash="dash", annotation_text="Meta 100%")
-            fig.update_yaxes(title="Cumplimiento (%)", rangemode="tozero")
-            st.plotly_chart(aplicar_layout_fig(fig, height=390), use_container_width=True)
-
-    panel_titulo("Resumen por observador")
-    if cumplimiento_df.empty:
-        st.info("Sin registros para mostrar.")
-    else:
-        filas = []
-        for observador, grupo in cumplimiento_df.groupby("Observador", dropna=False):
-            meta = sum(
-                pd.to_numeric(grupo[m], errors="coerce").fillna(0).sum()
-                for m in MESES_CUMPLIMIENTOS
-            )
-            real = sum(
-                pd.to_numeric(grupo[f"RE_{m}"], errors="coerce").fillna(0).sum()
-                for m in MESES_CUMPLIMIENTOS
-            )
-            filas.append({
-                "Observador": observador,
-                "Meta ene-jul": meta,
-                "Realizadas": real,
-                "Cumplimiento": f"{(real / meta * 100) if meta else 0:.0f}%",
-            })
-        tabla_limpia(
-            pd.DataFrame(filas),
-            ["Observador", "Meta ene-jul", "Realizadas", "Cumplimiento"],
-            centrar_todo=True,
-        )
-
-    # =============================================================
-    # INFORMACIÓN AGREGADA: CERTIFICACIONES Y RECONOCIMIENTOS
-    # =============================================================
-    certificaciones_df = datos.get("Certificaciones", pd.DataFrame()).copy()
-    reconocimientos_df = datos.get("Reconocimientos", pd.DataFrame()).copy()
-
-    if certificaciones_df is None:
-        certificaciones_df = pd.DataFrame()
-    if reconocimientos_df is None:
-        reconocimientos_df = pd.DataFrame()
-
-    # Conserva solamente registros reales de certificaciones.
-    if not certificaciones_df.empty:
-        columnas_clave_cert = [
-            columna
-            for columna in [
-                "Categoria",
-                "Subcategoria",
-                "Nombre_Certificacion",
-                "Vencimiento",
-            ]
-            if columna in certificaciones_df.columns
-        ]
-        if columnas_clave_cert:
-            mascara_cert = pd.Series(False, index=certificaciones_df.index)
-            for columna in columnas_clave_cert:
-                mascara_cert = mascara_cert | (
-                    certificaciones_df[columna]
-                    .fillna("")
-                    .astype(str)
-                    .str.strip()
-                    .ne("")
-                )
-            certificaciones_df = certificaciones_df.loc[mascara_cert].copy()
-
-    total_certificaciones = len(certificaciones_df)
-    vigentes_certificaciones = 0
-    por_vencer_certificaciones = 0
-    vencidas_certificaciones = 0
-
-    if not certificaciones_df.empty:
-        if "Estado" in certificaciones_df.columns:
-            estados_cert = certificaciones_df["Estado"].fillna("").apply(estado_base)
-        else:
-            estados_cert = pd.Series("Sin estado", index=certificaciones_df.index)
-
-        vigentes_certificaciones = int((estados_cert == "Vigente").sum())
-        por_vencer_certificaciones = int((estados_cert == "Por vencer").sum())
-        vencidas_certificaciones = int((estados_cert == "Vencida").sum())
-        certificaciones_df["Estado"] = estados_cert
-
-    cobertura_certificaciones = (
-        (vigentes_certificaciones + por_vencer_certificaciones)
-        / total_certificaciones
-        * 100
-        if total_certificaciones
-        else 0
-    )
-
-    proximo_dias = None
-    proximo_elemento = "Sin vencimientos registrados"
-    proximos_vencimientos = pd.DataFrame()
-
-    if not certificaciones_df.empty and "Vencimiento" in certificaciones_df.columns:
-        certificaciones_df["Vencimiento"] = certificaciones_df["Vencimiento"].apply(convertir_fecha)
-        certificaciones_df["Días restantes"] = certificaciones_df["Vencimiento"].apply(
-            lambda fecha: int((fecha.normalize() - HOY).days) if pd.notna(fecha) else pd.NA
-        )
-        proximos_vencimientos = certificaciones_df[
-            certificaciones_df["Días restantes"].notna()
-            & (certificaciones_df["Días restantes"] >= 0)
-        ].copy()
-        proximos_vencimientos = proximos_vencimientos.sort_values(
-            "Días restantes",
-            ascending=True,
-        )
-
-        if not proximos_vencimientos.empty:
-            primera_cert = proximos_vencimientos.iloc[0]
-            proximo_dias = int(primera_cert["Días restantes"])
-            proximo_elemento = str(
-                primera_cert.get("Subcategoria", "")
-                or primera_cert.get("Nombre_Certificacion", "")
-                or "Certificación"
-            ).strip()
-
-    # Reconocimientos del año 2026, alineados con el periodo del panel KPI.
-    if not reconocimientos_df.empty and "Fecha" in reconocimientos_df.columns:
-        reconocimientos_df["Fecha"] = reconocimientos_df["Fecha"].apply(convertir_fecha)
-        reconocimientos_2026 = reconocimientos_df[
-            reconocimientos_df["Fecha"].dt.year.eq(2026)
-        ].copy()
-    else:
-        reconocimientos_2026 = reconocimientos_df.copy()
-
-    # Elimina filas visualmente vacías de la hoja.
-    if not reconocimientos_2026.empty:
-        columnas_clave_rec = [
-            columna
-            for columna in ["Trabajador", "Motivo", "Periodo", "Estado"]
-            if columna in reconocimientos_2026.columns
-        ]
-        if columnas_clave_rec:
-            mascara_rec = pd.Series(False, index=reconocimientos_2026.index)
-            for columna in columnas_clave_rec:
-                mascara_rec = mascara_rec | (
-                    reconocimientos_2026[columna]
-                    .fillna("")
-                    .astype(str)
-                    .str.strip()
-                    .ne("")
-                )
-            reconocimientos_2026 = reconocimientos_2026.loc[mascara_rec].copy()
-
-    total_reconocimientos = len(reconocimientos_2026)
-    reconocimientos_entregados = 0
-    reconocimientos_corporativos = 0
-    personas_reconocidas = 0
-
-    if not reconocimientos_2026.empty:
-        if "Estado" in reconocimientos_2026.columns:
-            reconocimientos_entregados = int(
-                reconocimientos_2026["Estado"]
-                .fillna("")
-                .astype(str)
-                .str.contains("cerrada|entregada|realizada", case=False, regex=True, na=False)
-                .sum()
-            )
-
-        es_corporativo = pd.Series(False, index=reconocimientos_2026.index)
-        for columna in ["Trabajador", "Cargo", "Motivo", "Observacion"]:
-            if columna in reconocimientos_2026.columns:
-                texto_columna = reconocimientos_2026[columna].fillna("").apply(normalizar_texto)
-                es_corporativo = es_corporativo | texto_columna.str.contains(
-                    "empresa_saivam|reconocimiento_institucional|equipo_saivam",
-                    regex=True,
-                    na=False,
-                )
-
-        reconocimientos_corporativos = int(es_corporativo.sum())
-
-        if "Trabajador" in reconocimientos_2026.columns:
-            personas_reconocidas = int(
-                reconocimientos_2026.loc[~es_corporativo, "Trabajador"]
-                .replace("", pd.NA)
-                .dropna()
-                .nunique()
-            )
-
-    panel_titulo("Certificaciones y reconocimientos")
-
-    st.markdown(
-        "<div class='subsection-label notranslate' translate='no'>Estado de certificaciones</div>",
-        unsafe_allow_html=True,
-    )
-    cc1, cc2, cc3, cc4 = st.columns(4, gap="medium")
-    with cc1:
-        kpi_card(
-            "📜",
-            "Certificaciones controladas",
-            numero(total_certificaciones),
-            f"{cobertura_certificaciones:.0f}% con vigencia",
-        )
-    with cc2:
-        kpi_card(
-            "✅",
-            "Certificaciones vigentes",
-            numero(vigentes_certificaciones),
-            "Vigencia superior a 30 días",
-        )
-    with cc3:
-        kpi_card(
-            "⚠️",
-            "Por vencer",
-            numero(por_vencer_certificaciones),
-            "Vencen dentro de 30 días",
-        )
-    with cc4:
-        valor_proximo = f"{proximo_dias} días" if proximo_dias is not None else "—"
-        kpi_card(
-            "📌",
-            "Próximo vencimiento",
-            valor_proximo,
-            proximo_elemento,
-        )
-
-    st.markdown(
-        "<div class='subsection-label notranslate' translate='no'>Reconocimientos 2026</div>",
-        unsafe_allow_html=True,
-    )
-    cr1, cr2, cr3, cr4 = st.columns(4, gap="medium")
-    with cr1:
-        kpi_card(
-            "🏆",
-            "Reconocimientos 2026",
-            numero(total_reconocimientos),
-            "Registros del año",
-        )
-    with cr2:
-        kpi_card(
-            "👷",
-            "Personas reconocidas",
-            numero(personas_reconocidas),
-            "Trabajadores destacados",
-        )
-    with cr3:
-        kpi_card(
-            "🏢",
-            "Reconocimientos corporativos",
-            numero(reconocimientos_corporativos),
-            "Reconocimientos a SAIVAM",
-        )
-    with cr4:
-        kpi_card(
-            "✅",
-            "Reconocimientos entregados",
-            numero(reconocimientos_entregados),
-            "Registros cerrados",
-        )
-
-    col_cert, col_rec = st.columns(2, gap="large")
-
-    with col_cert:
-        panel_titulo("Certificaciones por categoría")
-        if certificaciones_df.empty or "Categoria" not in certificaciones_df.columns:
-            st.info("Sin datos de certificaciones para graficar.")
-        else:
-            categorias_cert = (
-                certificaciones_df["Categoria"]
-                .fillna("Sin categoría")
-                .astype(str)
-                .replace("", "Sin categoría")
-                .value_counts()
-                .rename_axis("Categoría")
-                .reset_index(name="Cantidad")
-            )
-            fig_cert = px.bar(
-                categorias_cert.sort_values("Cantidad"),
-                x="Cantidad",
-                y="Categoría",
-                orientation="h",
-                text="Cantidad",
-            )
-            fig_cert.update_traces(textposition="outside", marker_color="#62C990")
-            st.plotly_chart(
-                aplicar_layout_fig(fig_cert, height=330),
-                use_container_width=True,
-            )
-
-    with col_rec:
-        panel_titulo("Reconocimientos por mes")
-        if reconocimientos_2026.empty or "Fecha" not in reconocimientos_2026.columns:
-            st.info("Sin datos de reconocimientos para graficar.")
-        else:
-            reconocimientos_2026["Mes_Numero_KPI"] = reconocimientos_2026["Fecha"].dt.month
-            resumen_rec_mensual = (
-                reconocimientos_2026
-                .groupby("Mes_Numero_KPI", as_index=False)
-                .size()
-                .rename(columns={"size": "Cantidad"})
-            )
-            resumen_rec_mensual["Mes"] = resumen_rec_mensual["Mes_Numero_KPI"].map(MESES)
-            resumen_rec_mensual = resumen_rec_mensual.sort_values("Mes_Numero_KPI")
-            fig_rec = px.bar(
-                resumen_rec_mensual,
-                x="Mes",
-                y="Cantidad",
-                text="Cantidad",
-            )
-            fig_rec.update_traces(textposition="outside", marker_color="#62C990")
-            st.plotly_chart(
-                aplicar_layout_fig(fig_rec, height=330),
-                use_container_width=True,
-            )
-
-    col_vencimientos, col_ultimos = st.columns(2, gap="large")
-
-    with col_vencimientos:
-        panel_titulo("Próximos vencimientos")
-        if proximos_vencimientos.empty:
-            st.info("Sin vencimientos próximos registrados.")
-        else:
-            tabla_vencimientos = proximos_vencimientos.head(5).copy()
-            tabla_limpia(
-                tabla_vencimientos,
-                [
-                    "Categoria",
-                    "Subcategoria",
-                    "Vencimiento",
-                    "Días restantes",
-                    "Estado",
-                ],
-                centrar_todo=True,
-            )
-
-    with col_ultimos:
-        panel_titulo("Últimos reconocimientos")
-        if reconocimientos_2026.empty:
-            st.info("Sin reconocimientos registrados durante 2026.")
-        else:
-            ultimos_reconocimientos = reconocimientos_2026.sort_values(
-                "Fecha",
-                ascending=False,
-            ).head(5)
-            tabla_limpia(
-                ultimos_reconocimientos,
-                ["Fecha", "Trabajador", "Motivo", "Periodo", "Estado"],
-                centrar_todo=True,
-            )
-
-
-def pagina_reportabilidad(datos, filtros):
-    """
-    Panel de Reportabilidad basado en las columnas:
-
-    Fecha, Área, Tipo_Evento, Descripcion, Accion_Inmediata,
-    Responsable, Estado y Evidencia.
-    """
-    mostrar_sello_saivam_pagina()
-
-    # Usa .get() para que el módulo no se caiga si la pestaña todavía
-    # no está disponible o existe un problema temporal de conexión.
-    df = aplicar_filtros(
-        datos.get("Incidentes", pd.DataFrame()),
-        *filtros,
-    )
-
-    if df is None:
-        df = pd.DataFrame()
-
-    if df.empty:
-        st.warning(
-            "No se encontraron registros en la pestaña Reportabilidad. "
-            "Verifique que el Google Sheet esté compartido como lector "
-            "mediante enlace y que la pestaña contenga registros válidos."
-        )
-
-    # Asegura compatibilidad aunque una columna todavía no exista
-    # en la pestaña de Google Sheets.
-    columnas_requeridas = [
-        "Fecha",
-        "Área",
-        "Tipo_Evento",
-        "Descripcion",
-        "Accion_Inmediata",
-        "Responsable",
-        "Estado",
-        "Evidencia",
-    ]
-
-    for columna in columnas_requeridas:
-        if columna not in df.columns:
-            df[columna] = ""
-
-    estados = (
-        df["Estado"]
-        .fillna("")
-        .astype(str)
-        .str.strip()
-    )
-
-    pendientes = int(
-        estados.str.contains(
-            "Pendiente|Vencida",
-            case=False,
-            regex=True,
-            na=False,
-        ).sum()
-    )
-
-    en_proceso = int(
-        estados.str.contains(
-            "En proceso|En gestión|En gestion",
-            case=False,
-            regex=True,
-            na=False,
-        ).sum()
-    )
-
-    cerrados = int(
-        estados.str.contains(
-            "Cerrada|Cerrado|Finalizada|Finalizado",
-            case=False,
-            regex=True,
-            na=False,
-        ).sum()
-    )
-
-    c1, c2, c3, c4 = st.columns(4)
-
-    with c1:
-        kpi_card(
-            "📝",
-            "Eventos registrados",
-            numero(len(df)),
-            "Total de reportes",
-        )
-
-    with c2:
-        kpi_card(
-            "⚠️",
-            "Pendientes",
-            numero(pendientes),
-            "Requieren gestión",
-        )
-
-    with c3:
-        kpi_card(
-            "🔄",
-            "En proceso",
-            numero(en_proceso),
-            "Actualmente en seguimiento",
-        )
-
-    with c4:
-        kpi_card(
-            "✅",
-            "Cerrados",
-            numero(cerrados),
-            "Reportes finalizados",
-        )
-
-    # --------------------------------------------------------------
-    # GRÁFICOS PRINCIPALES
-    # --------------------------------------------------------------
-    col_a, col_b = st.columns(2)
-
-    with col_a:
-        card_inicio()
-        grafico_barra(
-            df,
-            "Tipo_Evento",
-            "Eventos por tipo",
-            orientacion="h",
-        )
-        card_fin()
-
-    with col_b:
-        card_inicio()
-        grafico_barra(
-            df,
-            "Área",
-            "Eventos por área",
-            orientacion="h",
-        )
-        card_fin()
-
-    col_c, col_d = st.columns(2)
-
-    with col_c:
-        card_inicio()
-        grafico_donut(
-            df,
-            "Estado",
-            "Estado de reportabilidad",
-        )
-        card_fin()
-
-    with col_d:
-        card_inicio()
-        grafico_tendencia(
-            df,
-            "Tendencia mensual de eventos",
-        )
-        card_fin()
-
-    # --------------------------------------------------------------
-    # DETALLE
-    # --------------------------------------------------------------
-    panel_titulo("Detalle de reportabilidad")
-
-    tabla_limpia(
-        df,
-        [
-            "Fecha",
-            "Área",
-            "Tipo_Evento",
-            "Descripcion",
-            "Accion_Inmediata",
-            "Responsable",
-            "Estado",
-            "Evidencia",
-        ],
-        height=430,
-        alinear_arriba_columnas=[
-            "Fecha",
-            "Área",
-            "Tipo_Evento",
-            "Descripcion",
-            "Accion_Inmediata",
-        ],
-    )
-
-    # --------------------------------------------------------------
-    # ALERTAS DE SEGUIMIENTO
-    # --------------------------------------------------------------
-    abiertos = df[
-        df["Estado"]
-        .fillna("")
-        .astype(str)
-        .str.contains(
-            "Pendiente|En proceso|Vencida",
-            case=False,
-            regex=True,
-            na=False,
-        )
-    ].copy()
-
-    if not abiertos.empty:
-        panel_titulo("Eventos que requieren seguimiento")
-
-        for _, fila in abiertos.iterrows():
-            tipo_evento = str(
-                fila.get("Tipo_Evento", "Evento")
-            ).strip() or "Evento"
-
-            area = str(
-                fila.get("Área", "Sin área")
-            ).strip() or "Sin área"
-
-            responsable = str(
-                fila.get("Responsable", "Sin responsable")
-            ).strip() or "Sin responsable"
-
-            estado = str(
-                fila.get("Estado", "Pendiente")
-            ).strip() or "Pendiente"
-
-            fecha = fecha_texto(
-                fila.get("Fecha", pd.NaT)
-            )
-
-            detalle_secundario = (
-                f"{area} · Responsable: {responsable}"
-            )
-
-            if fecha:
-                detalle_secundario += f" · {fecha}"
-
-            st.markdown(
-                f"""
-<div class="alert-card">
-    <div class="alert-card-title">
-        ⚠️ {escape_html(tipo_evento)}
-        <span>{escape_html(estado)}</span>
-    </div>
-    <div class="alert-card-text">
-        {escape_html(detalle_secundario)}
-    </div>
-</div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-
-
-def pagina_cumplimientos_sso(datos, filtros):
-    """Dashboard ejecutivo de cumplimiento de actividades SSO."""
-    mostrar_sello_saivam_pagina()
-
-    df = datos.get("Cumplimientos_SSO", pd.DataFrame()).copy()
-
-    if df is None or df.empty:
-        st.warning(
-            "No fue posible descargar la pestaña 'Cumplimientos SSO'. "
-            "El GID configurado es correcto, pero Google no está entregando el contenido CSV."
-        )
-        st.markdown(
-            """
-**Configuración necesaria en Google Sheets**  
-1. Presiona **Compartir**.  
-2. En **Acceso general**, selecciona **Cualquier persona con el enlace**.  
-3. Selecciona el permiso **Lector** y guarda.  
-4. Reinicia Streamlit o presiona **Actualizar Base de Datos**.
-
-El enlace puede abrir normalmente en Chrome porque tu cuenta de Google está
-iniciada, pero el proceso de Python no utiliza esa sesión.
-            """
-        )
-
-        detalle_error = st.session_state.get("error_cumplimientos_google", "")
-        if detalle_error:
-            with st.expander("Ver detalle técnico de la conexión"):
-                st.code(detalle_error, language="text")
-
-        st.info(
-            "Como respaldo, también puedes guardar el archivo "
-            "'Base_Datos_SGS_SAIVAM_Mulchen.xlsx' junto a app.py."
-        )
-        return
-
-    # ------------------------------------------------------------------
-    # Preparación y homologación de actividades
-    # ------------------------------------------------------------------
-    def homologar_actividad(nombre):
-        clave = normalizar_texto(nombre)
-        if "control_operacional" in clave and "cmpc" in clave:
-            return "Control operacional CMPC"
-        if "control_operacional" in clave and "saivam" in clave:
-            return "Control operacional SAIVAM"
-        if "ops" in clave and "bapp" in clave:
-            return "OPS BAPP"
-        if "ops" in clave and "cmpc" in clave:
-            return "OPS de Seguridad CMPC"
-        if "inspeccion" in clave or "check_list" in clave or "checklist" in clave:
-            return "Inspecciones / Check List SAIVAM"
-        if "observacion" in clave:
-            return "Observaciones de Seguridad SAIVAM"
-        return str(nombre).strip() or "Otra actividad"
-
-    orden_actividades = [
-        "Control operacional CMPC",
-        "Control operacional SAIVAM",
-        "OPS de Seguridad CMPC",
-        "OPS BAPP",
-        "Inspecciones / Check List SAIVAM",
-        "Observaciones de Seguridad SAIVAM",
-    ]
-
-    df["Actividad estándar"] = df["Actividad"].apply(homologar_actividad)
-    for columna in MESES_CORTOS + [f"RE_{mes}" for mes in MESES_CORTOS]:
-        if columna not in df.columns:
-            df[columna] = 0
-        df[columna] = df[columna].apply(_a_numero_cumplimiento)
-
-    df["Observador"] = df["Observador"].fillna("").astype(str).str.strip()
-    df = df[df["Observador"].ne("")].copy()
-
-    st.markdown(
-        """
-        <style>
-        .cumplimiento-hero {
-            padding: 22px 24px;
-            border: 1px solid rgba(52, 211, 153, .25);
-            border-radius: 18px;
-            background: linear-gradient(135deg, rgba(15,23,42,.98), rgba(6,78,59,.34));
-            margin-bottom: 14px;
-        }
-        .cumplimiento-hero h2 { margin: 0; color: #f8fafc; font-size: 28px; }
-        .cumplimiento-hero p { margin: 7px 0 0 0; color: #a7b0bf; font-size: 13px; }
-        .persona-card {
-            border: 1px solid rgba(148,163,184,.20);
-            border-radius: 15px;
-            padding: 14px 16px;
-            background: rgba(15,23,42,.68);
-            margin-bottom: 10px;
-        }
-        .persona-title { color:#f8fafc; font-weight:800; font-size:15px; margin-bottom:8px; }
-        .persona-meta { color:#94a3b8; font-size:12px; margin-top:7px; }
-        .progress-track { width:100%; height:10px; border-radius:99px; background:rgba(100,116,139,.28); overflow:hidden; }
-        .progress-fill { height:100%; border-radius:99px; }
-        .activity-pill {
-            display:inline-block; padding:5px 9px; border-radius:999px;
-            background:rgba(16,185,129,.12); border:1px solid rgba(52,211,153,.28);
-            color:#a7f3d0; font-size:11px; font-weight:700; margin:2px 3px 2px 0;
-        }
-        </style>
-        <div class="cumplimiento-hero">
-            <h2>🎯 Cumplimiento SSO 2026</h2>
-            <p>Seguimiento ejecutivo de actividades preventivas por colaborador, actividad y mes.</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # ------------------------------------------------------------------
-    # Filtros
-    # ------------------------------------------------------------------
-    observadores = sorted(df["Observador"].unique().tolist())
-    actividades_disponibles = [
-        actividad for actividad in orden_actividades
-        if actividad in df["Actividad estándar"].unique()
-    ]
-    actividades_extra = sorted(
-        set(df["Actividad estándar"].unique()) - set(actividades_disponibles)
-    )
-    actividades_disponibles += actividades_extra
-
-    f1, f2, f3 = st.columns([1.1, 1.55, .75], gap="medium")
-    with f1:
-        seleccion_observador = st.selectbox(
-            "Colaborador",
-            ["Todos"] + observadores,
-            key="cumplimientos_observador_v3",
-        )
-    with f2:
-        seleccion_actividad = st.multiselect(
-            "Actividades",
-            actividades_disponibles,
-            default=actividades_disponibles,
-            key="cumplimientos_actividad_v3",
-        )
-    with f3:
-        seleccion_periodo = st.selectbox(
-            "Periodo considerado",
-            [PERIODO_CUMPLIMIENTOS, PERIODO_ANUAL_CUMPLIMIENTOS],
-            index=0,
-            key="cumplimientos_periodo_v5",
-        )
-
-    if seleccion_periodo == PERIODO_ANUAL_CUMPLIMIENTOS:
-        meses_periodo = list(MESES_CORTOS)
-        detalle_periodo = (
-            "Cálculo anual: total de actividades realizadas entre ENE y DIC "
-            "dividido por el total programado para todo 2026."
-        )
-    else:
-        meses_periodo = list(MESES_CUMPLIMIENTOS)
-        detalle_periodo = (
-            "Cálculo oficial: total de actividades realizadas entre ENE y JUL "
-            "dividido por el total programado del mismo periodo. "
-            "Los registros de AGO a DIC no afectan estos indicadores."
-        )
-
-    st.caption(detalle_periodo)
-
-    filtrado = df.copy()
-    if seleccion_observador != "Todos":
-        filtrado = filtrado[filtrado["Observador"] == seleccion_observador]
-    if seleccion_actividad:
-        filtrado = filtrado[filtrado["Actividad estándar"].isin(seleccion_actividad)]
-    else:
-        filtrado = filtrado.iloc[0:0]
-
-    if filtrado.empty:
-        st.info("No existen registros para los filtros seleccionados.")
-        return
-
-    # Periodo dinámico según la selección: enero-julio o año completo.
-    reales_periodo = [f"RE_{mes}" for mes in meses_periodo]
-
-    meta_total = float(filtrado[meses_periodo].sum().sum())
-    real_total = float(filtrado[reales_periodo].sum().sum())
-    pendientes = max(0.0, meta_total - real_total)
-    cumplimiento_total = (real_total / meta_total * 100) if meta_total else 0.0
-
-    def color_cumplimiento(valor):
-        if valor >= 100:
-            return "#22c55e"
-        if valor >= 90:
-            return "#10b981"
-        if valor >= 80:
-            return "#eab308"
-        if valor >= 70:
-            return "#f97316"
-        return "#ef4444"
-
-    # ------------------------------------------------------------------
-    # KPI ejecutivos
-    # ------------------------------------------------------------------
-    k1, k2, k3, k4 = st.columns(4, gap="medium")
-    with k1:
-        kpi_card("📈", "Cumplimiento", f"{cumplimiento_total:.0f}%", seleccion_periodo)
-    with k2:
-        kpi_card("✅", "Realizadas", numero(real_total), "Actividades ejecutadas")
-    with k3:
-        kpi_card("🎯", "Programadas", numero(meta_total), "Meta del periodo")
-    with k4:
-        kpi_card("⏳", "Pendientes", numero(pendientes), "Brecha respecto de la meta")
-
-    # ------------------------------------------------------------------
-    # Resúmenes consolidados
-    # ------------------------------------------------------------------
-    filas_persona = []
-    for observador, grupo in filtrado.groupby("Observador", dropna=False):
-        meta = float(grupo[meses_periodo].sum().sum())
-        real = float(grupo[reales_periodo].sum().sum())
-        filas_persona.append({
-            "Colaborador": observador,
-            "Meta": meta,
-            "Realizadas": real,
-            "Pendientes": max(0.0, meta - real),
-            "Cumplimiento": (real / meta * 100) if meta else 0.0,
-        })
-    por_persona = pd.DataFrame(filas_persona).sort_values(
-        ["Cumplimiento", "Realizadas"], ascending=[False, False]
-    )
-
-    filas_actividad = []
-    for actividad, grupo in filtrado.groupby("Actividad estándar", dropna=False):
-        meta = float(grupo[meses_periodo].sum().sum())
-        real = float(grupo[reales_periodo].sum().sum())
-        filas_actividad.append({
-            "Actividad": actividad,
-            "Meta": meta,
-            "Realizadas": real,
-            "Pendientes": max(0.0, meta - real),
-            "Cumplimiento": (real / meta * 100) if meta else 0.0,
-        })
-    por_actividad = pd.DataFrame(filas_actividad)
-    por_actividad["_orden"] = por_actividad["Actividad"].apply(
-        lambda x: orden_actividades.index(x) if x in orden_actividades else 99
-    )
-    por_actividad = por_actividad.sort_values(["_orden", "Actividad"]).drop(columns="_orden")
-
-    # ------------------------------------------------------------------
-    # Vista principal: ranking y actividad
-    # ------------------------------------------------------------------
-    izquierda, derecha = st.columns([1.05, 1.25], gap="large")
-
-    with izquierda:
-        panel_titulo("Ranking de cumplimiento por colaborador")
-        ranking = por_persona.sort_values("Cumplimiento", ascending=True)
-        colores = [color_cumplimiento(v) for v in ranking["Cumplimiento"]]
-        fig = go.Figure(go.Bar(
-            x=ranking["Cumplimiento"],
-            y=ranking["Colaborador"],
-            orientation="h",
-            text=[f"{v:.0f}%" for v in ranking["Cumplimiento"]],
-            textposition="outside",
-            marker_color=colores,
-            customdata=ranking[["Meta", "Realizadas", "Pendientes"]],
-            hovertemplate=(
-                "%{y}<br>Cumplimiento: %{x:.0f}%"
-                "<br>Meta: %{customdata[0]:.0f}"
-                "<br>Realizadas: %{customdata[1]:.0f}"
-                "<br>Pendientes: %{customdata[2]:.0f}<extra></extra>"
-            ),
-        ))
-        fig.add_vline(x=100, line_dash="dash", line_color="#94a3b8")
-        fig.update_layout(title=dict(text=""), showlegend=False)
-        fig.update_xaxes(title="Cumplimiento (%)", range=[0, max(110, ranking["Cumplimiento"].max() * 1.15)])
-        fig.update_yaxes(title="", automargin=True)
-        st.plotly_chart(
-            aplicar_layout_fig(fig, height=max(360, 120 + len(ranking) * 48)),
-            use_container_width=True,
-            config={"displaylogo": False},
-        )
-
-    with derecha:
-        panel_titulo("Cumplimiento por actividad")
-        actividad_graf = por_actividad.sort_values("Cumplimiento", ascending=True)
-        colores = [color_cumplimiento(v) for v in actividad_graf["Cumplimiento"]]
-        fig = go.Figure(go.Bar(
-            x=actividad_graf["Cumplimiento"],
-            y=actividad_graf["Actividad"],
-            orientation="h",
-            text=[f"{v:.0f}%" for v in actividad_graf["Cumplimiento"]],
-            textposition="outside",
-            marker_color=colores,
-            customdata=actividad_graf[["Meta", "Realizadas", "Pendientes"]],
-            hovertemplate=(
-                "%{y}<br>Cumplimiento: %{x:.0f}%"
-                "<br>Meta: %{customdata[0]:.0f}"
-                "<br>Realizadas: %{customdata[1]:.0f}"
-                "<br>Pendientes: %{customdata[2]:.0f}<extra></extra>"
-            ),
-        ))
-        fig.add_vline(x=100, line_dash="dash", line_color="#94a3b8")
-        fig.update_layout(title=dict(text=""), showlegend=False)
-        fig.update_xaxes(title="Cumplimiento (%)", range=[0, max(110, actividad_graf["Cumplimiento"].max() * 1.15)])
-        fig.update_yaxes(title="", automargin=True)
-        st.plotly_chart(
-            aplicar_layout_fig(fig, height=max(360, 120 + len(actividad_graf) * 48)),
-            use_container_width=True,
-            config={"displaylogo": False},
-        )
-
-    # ------------------------------------------------------------------
-    # Tendencia mensual y distribución
-    # ------------------------------------------------------------------
-    resumen_mes = []
-    for mes in MESES_CORTOS:
-        meta = float(filtrado[mes].sum())
-        real = float(filtrado[f"RE_{mes}"].sum())
-        resumen_mes.append({
-            "Mes": mes,
-            "Meta": meta,
-            "Realizadas": real,
-            "Cumplimiento": (real / meta * 100) if meta else 0.0,
-        })
-    resumen_mes = pd.DataFrame(resumen_mes)
-    resumen_visible = resumen_mes[resumen_mes["Mes"].isin(meses_periodo)].copy()
-
-    c1, c2 = st.columns([1.35, .85], gap="large")
-    with c1:
-        panel_titulo("Evolución mensual")
-        fig = go.Figure()
-        fig.add_trace(go.Bar(
-            x=resumen_visible["Mes"], y=resumen_visible["Meta"],
-            name="Programadas", opacity=.45,
-            hovertemplate="%{x}<br>Programadas: %{y:.0f}<extra></extra>",
-        ))
-        fig.add_trace(go.Bar(
-            x=resumen_visible["Mes"], y=resumen_visible["Realizadas"],
-            name="Realizadas",
-            hovertemplate="%{x}<br>Realizadas: %{y:.0f}<extra></extra>",
-        ))
-        fig.add_trace(go.Scatter(
-            x=resumen_visible["Mes"], y=resumen_visible["Cumplimiento"],
-            name="Cumplimiento %", mode="lines+markers+text", yaxis="y2",
-            text=[f"{v:.0f}%" for v in resumen_visible["Cumplimiento"]],
-            textposition="top center",
-            hovertemplate="%{x}<br>Cumplimiento: %{y:.0f}%<extra></extra>",
-        ))
-        fig.update_layout(
-            barmode="group",
-            yaxis=dict(title="Cantidad"),
-            yaxis2=dict(title="Cumplimiento (%)", overlaying="y", side="right", rangemode="tozero"),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-        )
-        st.plotly_chart(
-            aplicar_layout_fig(fig, height=410),
-            use_container_width=True,
-            config={"displaylogo": False},
-        )
-
-    with c2:
-        panel_titulo("Distribución de realizadas")
-        fig = go.Figure(go.Pie(
-            labels=por_actividad["Actividad"],
-            values=por_actividad["Realizadas"],
-            hole=.62,
-            textinfo="percent",
-            texttemplate="%{percent:.0%}",
-            hovertemplate="%{label}<br>Realizadas: %{value:.0f}<br>%{percent:.0%}<extra></extra>",
-        ))
-        fig.update_layout(showlegend=True, legend=dict(orientation="h", y=-.15))
-        st.plotly_chart(
-            aplicar_layout_fig(fig, height=410),
-            use_container_width=True,
-            config={"displaylogo": False},
-        )
-
-    # ------------------------------------------------------------------
-    # Tarjetas individuales
-    # ------------------------------------------------------------------
-    panel_titulo("Detalle por colaborador")
-    columnas_tarjetas = st.columns(2, gap="medium")
-    for indice, fila in por_persona.reset_index(drop=True).iterrows():
-        valor = float(fila["Cumplimiento"])
-        ancho = min(100.0, max(0.0, valor))
-        color = color_cumplimiento(valor)
-        with columnas_tarjetas[indice % 2]:
-            st.markdown(
-                f"""
-                <div class="persona-card">
-                    <div class="persona-title">👷 {escape_html(fila['Colaborador'])}</div>
-                    <div class="progress-track">
-                        <div class="progress-fill" style="width:{ancho:.1f}%; background:{color};"></div>
-                    </div>
-                    <div class="persona-meta">
-                        <b style="color:{color};">{valor:.0f}%</b> · Meta {fila['Meta']:.0f} ·
-                        Realizadas {fila['Realizadas']:.0f} · Pendientes {fila['Pendientes']:.0f}
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-    # ------------------------------------------------------------------
-    # Vistas de control
-    # ------------------------------------------------------------------
-    # Se utiliza un selector horizontal en lugar de st.tabs(). Esto evita el
-    # error del navegador "removeChild" que puede aparecer cuando Chrome
-    # Translate o alguna extensión modifica el DOM que Streamlit administra.
-    vista_control = st.radio(
-        "Vista de información",
-        [
-            "📋 Resumen por actividad",
-            "🗓️ Matriz mensual",
-            "🔥 Mapa de calor",
-        ],
-        horizontal=True,
-        label_visibility="collapsed",
-        key="vista_control_cumplimientos_sso",
-    )
-
-    if vista_control == "📋 Resumen por actividad":
-        resumen_tabla = por_actividad.copy()
-        resumen_tabla["Cumplimiento"] = resumen_tabla["Cumplimiento"].map(
-            lambda valor: f"{float(valor):.0f}%"
-        )
-        tabla_limpia(
-            resumen_tabla,
-            ["Actividad", "Meta", "Realizadas", "Pendientes", "Cumplimiento"],
-            centrar_todo=False,
-        )
-
-    elif vista_control == "🗓️ Matriz mensual":
-        detalle = filtrado[["Observador", "Actividad estándar"]].copy()
-        detalle = detalle.rename(columns={"Actividad estándar": "Actividad"})
-
-        for mes in meses_periodo:
-            metas_mes = pd.to_numeric(filtrado[mes], errors="coerce").fillna(0)
-            realizadas_mes = pd.to_numeric(
-                filtrado[f"RE_{mes}"], errors="coerce"
-            ).fillna(0)
-
-            detalle[mes] = [
-                f"{real:.0f}/{meta:.0f} ({(real / meta * 100 if meta else 0):.0f}%)"
-                for meta, real in zip(metas_mes, realizadas_mes)
-            ]
-
-        tabla_limpia(
-            detalle,
-            modo_ultracompacto=True,
-            centrar_todo=True,
-        )
-
-    else:
-        heat_rows = []
-        heat_labels = []
-
-        for _, fila in filtrado.iterrows():
-            valores = []
-
-            for mes in meses_periodo:
-                meta = _a_numero_cumplimiento(fila.get(mes, 0))
-                real = _a_numero_cumplimiento(fila.get(f"RE_{mes}", 0))
-                cumplimiento_mes = (real / meta * 100) if meta > 0 else 0.0
-                valores.append(cumplimiento_mes)
-
-            heat_rows.append(valores)
-            heat_labels.append(
-                f"{fila['Observador']} · {fila['Actividad estándar']}"
-            )
-
-        if heat_rows:
-            maximo_heatmap = max(max(fila) for fila in heat_rows)
-            fig_heatmap = go.Figure(
-                go.Heatmap(
-                    z=heat_rows,
-                    x=meses_periodo,
-                    y=heat_labels,
-                    zmin=0,
-                    zmax=max(120, maximo_heatmap),
-                    colorscale=[
-                        [0.00, "#7f1d1d"],
-                        [0.58, "#ef4444"],
-                        [0.70, "#f97316"],
-                        [0.80, "#eab308"],
-                        [0.90, "#10b981"],
-                        [1.00, "#22c55e"],
-                    ],
-                    colorbar=dict(title="Cumpl. %"),
-                    hovertemplate=(
-                        "%{y}<br>%{x}: %{z:.0f}%<extra></extra>"
-                    ),
-                )
-            )
-            fig_heatmap.update_layout(title=dict(text=""))
-            fig_heatmap.update_xaxes(title="Mes")
-            fig_heatmap.update_yaxes(title="", automargin=True)
-
-            alto_heatmap = max(
-                420,
-                min(880, 160 + len(heat_labels) * 31),
-            )
-
-            st.plotly_chart(
-                aplicar_layout_fig(fig_heatmap, height=alto_heatmap),
-                use_container_width=True,
-                config={"displaylogo": False},
-                key="heatmap_cumplimientos_sso",
-            )
-        else:
-            st.info("No existen datos para generar el mapa de calor.")
-
-def pagina_ops(datos, filtros):
-    """
-    Módulo compatible con dos estructuras de la hoja Observaciones_SSO_BAPP:
-
-    1. Formato histórico por registro individual.
-    2. Formato anual por observador, con columnas Enero-Diciembre,
-       Real Año, Teórica Año y Avance.
-
-    La detección es automática, por lo que no es necesario cambiar el nombre
-    de la hoja ni crear una segunda planilla.
-    """
-    df_original = datos["OPS"].copy()
-
-    columnas_por_clave = {
-        normalizar_texto(columna): columna
-        for columna in df_original.columns
+/* =========================================================
+   TELÉFONO VERTICAL ESTRECHO
+   ========================================================= */
+@media (max-width: 430px) and (orientation: portrait) {
+    :root {
+        --mobile-padding-x: 8px !important;
     }
 
-    es_matriz_anual = (
-        "observador" in columnas_por_clave
-        and "tipo_observacion" in columnas_por_clave
-        and "enero" in columnas_por_clave
-        and "real_ano" in columnas_por_clave
-    )
-
-    if es_matriz_anual:
-        meses = [
-            "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
-            "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre",
-            "Diciembre",
-        ]
-
-        nombres_estandar = {
-            "observador": "Observador",
-            "tipo_observacion": "Tipo Observación",
-            "enero": "Enero",
-            "febrero": "Febrero",
-            "marzo": "Marzo",
-            "abril": "Abril",
-            "mayo": "Mayo",
-            "junio": "Junio",
-            "julio": "Julio",
-            "agosto": "Agosto",
-            "septiembre": "Septiembre",
-            "octubre": "Octubre",
-            "noviembre": "Noviembre",
-            "diciembre": "Diciembre",
-            "real_ano": "Real Año",
-            "teorica_ano": "Teórica Año",
-            "avance": "Avance",
-        }
-
-        renombrar = {
-            columna_original: nombres_estandar[clave]
-            for clave, columna_original in columnas_por_clave.items()
-            if clave in nombres_estandar
-        }
-
-        matriz = df_original.rename(columns=renombrar).copy()
-
-        columnas_matriz = [
-            "Observador",
-            "Tipo Observación",
-            *meses,
-            "Real Año",
-            "Teórica Año",
-            "Avance",
-        ]
-
-        for columna in columnas_matriz:
-            if columna not in matriz.columns:
-                matriz[columna] = ""
-
-        matriz = matriz[columnas_matriz].copy()
-
-        for columna in meses + ["Real Año", "Teórica Año"]:
-            matriz[columna] = matriz[columna].apply(limpiar_numero)
-
-        # Excel puede entregar Avance como número decimal (0,56), número entero
-        # (56) o texto con porcentaje ("56%"). Se fuerza tipo texto/objeto para
-        # permitir mostrar el símbolo % sin provocar un TypeError de pandas.
-        matriz["Avance"] = (
-            matriz["Avance"]
-            .fillna("")
-            .astype("object")
-        )
-
-        matriz["Observador"] = (
-            matriz["Observador"]
-            .fillna("")
-            .astype(str)
-            .str.strip()
-        )
-        matriz["Tipo Observación"] = (
-            matriz["Tipo Observación"]
-            .fillna("")
-            .astype(str)
-            .str.strip()
-        )
-
-        tipo_normalizado = matriz["Tipo Observación"].apply(normalizar_texto)
-        observador_normalizado = matriz["Observador"].apply(normalizar_texto)
-
-        es_resumen = (
-            tipo_normalizado.str.contains("teorica|cumplimiento", na=False)
-            | observador_normalizado.str.contains("teorica|cumplimiento", na=False)
-        )
-
-        registros = matriz.loc[~es_resumen].copy()
-        registros = registros[
-            registros["Observador"].ne("")
-            & registros["Tipo Observación"].ne("")
-        ].copy()
-
-        # Completa automáticamente Real Año cuando la celda viene vacía o en cero.
-        suma_meses = registros[meses].sum(axis=1)
-        mascara_real_vacio = registros["Real Año"].fillna(0).eq(0)
-        registros.loc[mascara_real_vacio, "Real Año"] = suma_meses.loc[
-            mascara_real_vacio
-        ]
-
-        # Completa el avance anual desde Real/Teórica cuando corresponde.
-        registros["Avance calculado"] = registros.apply(
-            lambda fila: (
-                fila["Real Año"] / fila["Teórica Año"] * 100
-                if fila["Teórica Año"] > 0
-                else 0
-            ),
-            axis=1,
-        )
-
-        def avance_visible(fila):
-            avance_original = str(fila.get("Avance", "")).strip()
-
-            if avance_original and avance_original.lower() not in {
-                "nan", "none", "nat"
-            }:
-                if "%" in avance_original:
-                    return avance_original
-
-                valor = limpiar_numero(avance_original)
-
-                if valor <= 1:
-                    valor *= 100
-
-                return porcentaje(valor)
-
-            return porcentaje(fila["Avance calculado"])
-
-        registros["Avance"] = registros.apply(avance_visible, axis=1)
-
-        # Actualiza en la matriz solo el acumulado numérico. El avance formateado
-        # se conserva en `registros`, evitando mezclar porcentajes de texto con
-        # columnas numéricas provenientes de Excel.
-        for indice in registros.index:
-            matriz.loc[indice, "Real Año"] = registros.loc[indice, "Real Año"]
-
-        total_real = registros["Real Año"].sum()
-        total_teorico = registros["Teórica Año"].sum()
-        avance_total = (
-            total_real / total_teorico * 100
-            if total_teorico > 0
-            else 0
-        )
-
-        # -------------------------------------------------------------
-        # CUMPLIMIENTO REAL A LA FECHA
-        # -------------------------------------------------------------
-        # Solo considera los meses transcurridos hasta el mes actual.
-        # No proyecta ni incorpora metas de los meses siguientes.
-        mes_actual_numero = int(HOY.month)
-        meses_a_la_fecha = meses[:mes_actual_numero]
-
-        real_a_la_fecha = registros[meses_a_la_fecha].sum(axis=1).sum()
-
-        # Las filas TEORICAS de la planilla contienen las metas mensuales
-        # consolidadas de Seguridad y BAPP.
-        filas_teoricas = matriz.loc[
-            tipo_normalizado.str.contains("teorica", na=False)
-            | observador_normalizado.str.contains("teorica", na=False)
-        ].copy()
-
-        teorico_a_la_fecha = 0.0
-
-        if not filas_teoricas.empty:
-            teorico_a_la_fecha = filas_teoricas[meses_a_la_fecha].sum(axis=1).sum()
-
-        # Respaldo: si la hoja no contiene filas TEORICAS, distribuye la
-        # meta anual proporcionalmente hasta el mes actual.
-        if teorico_a_la_fecha <= 0 and total_teorico > 0:
-            teorico_a_la_fecha = total_teorico * (mes_actual_numero / 12)
-
-        porcentaje_a_la_fecha = (
-            real_a_la_fecha / teorico_a_la_fecha * 100
-            if teorico_a_la_fecha > 0
-            else 0
-        )
-
-        seguridad = registros[
-            registros["Tipo Observación"]
-            .apply(normalizar_texto)
-            .eq("seguridad")
-        ]
-        bapp = registros[
-            registros["Tipo Observación"]
-            .apply(normalizar_texto)
-            .eq("bapp")
-        ]
-
-        total_seguridad = seguridad["Real Año"].sum()
-        total_bapp = bapp["Real Año"].sum()
-
-        c1, c2, c3, c4, c5 = st.columns(5)
-
-        with c1:
-            kpi_card(
-                "👷",
-                "Observadores",
-                numero(registros["Observador"].nunique()),
-                "Personas con meta asignada",
-            )
-
-        with c2:
-            kpi_card(
-                "🟢",
-                "Observaciones SSO",
-                numero(total_seguridad),
-                "Acumulado real del año",
-            )
-
-        with c3:
-            kpi_card(
-                "👀",
-                "Observaciones BAPP",
-                numero(total_bapp),
-                "Acumulado real del año",
-            )
-
-        with c4:
-            kpi_card(
-                "📈",
-                "Avance anual",
-                porcentaje(avance_total),
-                f"{numero(total_real)} de {numero(total_teorico)}",
-            )
-
-        with c5:
-            kpi_card(
-                "📅",
-                "% a la fecha",
-                porcentaje(porcentaje_a_la_fecha),
-                (
-                    f"{numero(real_a_la_fecha)} de "
-                    f"{numero(teorico_a_la_fecha)} · "
-                    f"hasta {MESES.get(mes_actual_numero, '')}"
-                ),
-            )
-
-        # Gráfico 1: avance por observador.
-        grafico_observador = registros[
-            ["Observador", "Tipo Observación", "Real Año", "Teórica Año"]
-        ].copy()
-
-        grafico_observador = grafico_observador.melt(
-            id_vars=["Observador", "Tipo Observación"],
-            value_vars=["Real Año", "Teórica Año"],
-            var_name="Indicador",
-            value_name="Cantidad",
-        )
-
-        # Gráfico 2: evolución mensual por tipo de observación.
-        # Solo se incluyen en el gráfico los meses con información cargada.
-        meses_grafico = [
-            mes
-            for mes in meses
-            if registros[mes].sum() > 0
-        ]
-
-        mensual = registros.melt(
-            id_vars=["Observador", "Tipo Observación"],
-            value_vars=meses_grafico,
-            var_name="Mes",
-            value_name="Cantidad",
-        )
-
-        mensual["Mes"] = pd.Categorical(
-            mensual["Mes"],
-            categories=meses_grafico,
-            ordered=True,
-        )
-
-        mensual = (
-            mensual.groupby(
-                ["Mes", "Tipo Observación"],
-                observed=False,
-                as_index=False,
-            )["Cantidad"]
-            .sum()
-        )
-
-        col_a, col_b = st.columns(2)
-
-        with col_a:
-            card_inicio()
-            fig_observador = px.bar(
-                grafico_observador,
-                x="Observador",
-                y="Cantidad",
-                color="Indicador",
-                barmode="group",
-                title="Resultado real versus meta anual",
-                text_auto=".0f",
-            )
-            fig_observador = aplicar_layout_fig(
-                fig_observador,
-                height=410,
-            )
-            fig_observador.update_layout(
-                legend=dict(
-                    orientation="h",
-                    yanchor="top",
-                    y=-0.34,
-                    xanchor="center",
-                    x=0.5,
-                    title_text="",
-                ),
-                xaxis_title=None,
-                margin=dict(l=18, r=18, t=58, b=110),
-            )
-            st.plotly_chart(
-                fig_observador,
-                use_container_width=True,
-            )
-            card_fin()
-
-        with col_b:
-            card_inicio()
-            if mensual.empty:
-                st.info("No existen datos mensuales cargados para graficar.")
-            else:
-                fig_mensual = px.line(
-                    mensual,
-                    x="Mes",
-                    y="Cantidad",
-                    color="Tipo Observación",
-                    markers=True,
-                    title="Evolución mensual de observaciones",
-                )
-                fig_mensual = aplicar_layout_fig(
-                    fig_mensual,
-                    height=410,
-                )
-                fig_mensual.update_layout(
-                    legend=dict(
-                        orientation="h",
-                        yanchor="top",
-                        y=-0.34,
-                        xanchor="center",
-                        x=0.5,
-                        title_text="",
-                    ),
-                    margin=dict(l=18, r=18, t=58, b=110),
-                )
-                st.plotly_chart(
-                    fig_mensual,
-                    use_container_width=True,
-                )
-            card_fin()
-
-        panel_titulo("Cumplimiento anual por observador")
-
-        tabla_registros = registros[
-            [
-                "Observador",
-                "Tipo Observación",
-                *meses,
-                "Real Año",
-                "Teórica Año",
-                "Avance",
-            ]
-        ].copy()
-
-        abreviaturas_meses = {
-            "Enero": "ENE.",
-            "Febrero": "FEB.",
-            "Marzo": "MAR.",
-            "Abril": "ABR.",
-            "Mayo": "MAY.",
-            "Junio": "JUN.",
-            "Julio": "JUL.",
-            "Agosto": "AGO.",
-            "Septiembre": "SEP.",
-            "Octubre": "OCT.",
-            "Noviembre": "NOV.",
-            "Diciembre": "DIC.",
-        }
-
-        # Se muestran únicamente los meses que tienen datos reales.
-        meses_con_datos = [
-            mes
-            for mes in meses
-            if registros[mes].sum() > 0
-        ]
-
-        tabla_registros = tabla_registros.rename(
-            columns=abreviaturas_meses
-        )
-
-        # Porcentaje individual a la fecha: solo meses transcurridos.
-        meses_abreviados_a_la_fecha = [
-            abreviaturas_meses[mes]
-            for mes in meses_a_la_fecha
-            if mes in meses_con_datos
-        ]
-
-        if meses_abreviados_a_la_fecha:
-            tabla_registros["Real a la fecha"] = tabla_registros[
-                meses_abreviados_a_la_fecha
-            ].sum(axis=1)
-        else:
-            tabla_registros["Real a la fecha"] = 0
-
-        tabla_registros["Meta a la fecha"] = tabla_registros.apply(
-            lambda fila: (
-                fila["Teórica Año"] * (mes_actual_numero / 12)
-                if fila["Teórica Año"] > 0
-                else 0
-            ),
-            axis=1,
-        )
-
-        tabla_registros["% a la fecha"] = tabla_registros.apply(
-            lambda fila: porcentaje(
-                fila["Real a la fecha"] / fila["Meta a la fecha"] * 100
-                if fila["Meta a la fecha"] > 0
-                else 0
-            ),
-            axis=1,
-        )
-
-        tabla_limpia(
-            tabla_registros,
-            [
-                "Observador",
-                "Tipo Observación",
-                *[
-                    abreviaturas_meses[mes]
-                    for mes in meses_con_datos
-                ],
-                "Real Año",
-                "Teórica Año",
-                "Avance",
-                "Real a la fecha",
-                "Meta a la fecha",
-                "% a la fecha",
-            ],
-            height=430,
-            centrar_todo=True,
-            modo_ultracompacto=True,
-        )
-
-        return
-
-    # -----------------------------------------------------------------
-    # FORMATO HISTÓRICO ORIGINAL: una fila por observación.
-    # -----------------------------------------------------------------
-    df = aplicar_filtros(df_original, *filtros)
-
-    seguras = int(
-        df["Tipo_Observacion"]
-        .astype(str)
-        .str.contains(
-            "segura|positivo",
-            case=False,
-            regex=True,
-            na=False,
-        )
-        .sum()
-    ) if not df.empty else 0
-
-    riesgos = int(
-        df["Tipo_Observacion"]
-        .astype(str)
-        .str.contains(
-            "riesgo|subestandar|subestándar",
-            case=False,
-            regex=True,
-            na=False,
-        )
-        .sum()
-    ) if not df.empty else 0
-
-    pendientes = int(
-        df["Estado"]
-        .astype(str)
-        .str.contains(
-            "Pendiente|En proceso|Vencida",
-            case=False,
-            regex=True,
-            na=False,
-        )
-        .sum()
-    ) if not df.empty else 0
-
-    c1, c2, c3, c4 = st.columns(4)
-
-    with c1:
-        kpi_card(
-            "👷",
-            "OPS totales",
-            numero(len(df)),
-            "Observaciones preventivas",
-        )
-
-    with c2:
-        kpi_card(
-            "🟢",
-            "Conductas seguras",
-            numero(seguras),
-            "Refuerzo positivo",
-        )
-
-    with c3:
-        kpi_card(
-            "🟠",
-            "Conductas de riesgo",
-            numero(riesgos),
-            "Requieren control",
-        )
-
-    with c4:
-        kpi_card(
-            "⚠️",
-            "OPS pendientes",
-            numero(pendientes),
-            "Con acción abierta",
-        )
-
-    col_a, col_b = st.columns(2)
-
-    with col_a:
-        card_inicio()
-        grafico_barra(
-            df,
-            "Área",
-            "OPS por área",
-            orientacion="h",
-        )
-        card_fin()
-
-    with col_b:
-        card_inicio()
-        grafico_donut(
-            df,
-            "Tipo_Observacion",
-            "Tipo de observación",
-        )
-        card_fin()
-
-    panel_titulo("Detalle OPS preventivas")
-
-    tabla_limpia(
-        df,
-        [
-            "Fecha",
-            "Área",
-            "Trabajador",
-            "Supervisor",
-            "Actividad",
-            "Tipo_Observacion",
-            "Conducta_Segura",
-            "Conducta_Riesgo",
-            "Medida_Correctiva",
-            "Responsable",
-            "Fecha_Compromiso",
-            "Estado",
-        ],
-    )
-
-
-
-def pagina_inspecciones(datos, filtros):
-    df = aplicar_filtros(datos["Inspecciones"], *filtros)
-    total = len(df)
-    cumple = int(df["Resultado"].astype(str).str.contains("Cumple", case=False, na=False).sum()) if not df.empty else 0
-    no_cumple = int(df["Resultado"].astype(str).str.contains("No cumple", case=False, na=False).sum()) if not df.empty else 0
-    cumplimiento = (cumple / total * 100) if total else 0
-
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        kpi_card("📋", "Inspecciones", numero(total), "Registros del periodo")
-    with c2:
-        kpi_card("✅", "Cumplimiento", porcentaje(cumplimiento), "Resultado cumple")
-    with c3:
-        kpi_card("❌", "No cumple", numero(no_cumple), "Hallazgos detectados")
-    with c4:
-        vencidas = int(df["Estado"].astype(str).str.contains("Vencida", case=False, na=False).sum()) if not df.empty else 0
-        kpi_card("⚠️", "Vencidas", numero(vencidas), "Fuera de plazo")
-
-    col_a, col_b = st.columns(2)
-    with col_a:
-        card_inicio()
-        grafico_donut(df, "Resultado", "Resultado de inspecciones")
-        card_fin()
-    with col_b:
-        card_inicio()
-        grafico_barra(df, "Tipo_Inspeccion", "Inspecciones por tipo", orientacion="h")
-        card_fin()
-
-    panel_titulo("Detalle de inspecciones")
-    tabla_limpia(df, ["Fecha", "Área", "Tipo_Inspeccion", "Resultado", "Hallazgos", "Responsable", "Fecha_Compromiso", "Estado", "Observacion"])
-
-
-def pagina_plan_accion(datos, filtros):
-    df = aplicar_filtros(datos["Plan_Accion"], *filtros)
-    total = len(df)
-    cerradas = int(df["Estado"].astype(str).str.contains("Cerrada", case=False, na=False).sum()) if not df.empty else 0
-    vencidas = int(df["Estado"].astype(str).str.contains("Vencida", case=False, na=False).sum()) if not df.empty else 0
-    pendientes = int(df["Estado"].astype(str).str.contains("Pendiente|En proceso|Vencida", case=False, regex=True, na=False).sum()) if not df.empty else 0
-    cumplimiento = (cerradas / total * 100) if total else 0
-
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        kpi_card("✅", "Acciones totales", numero(total), "Plan de acción SSO")
-    with c2:
-        kpi_card("🟢", "Cerradas", numero(cerradas), f"{porcentaje(cumplimiento)} de cumplimiento")
-    with c3:
-        kpi_card("🟠", "Pendientes", numero(pendientes), "Seguimiento requerido")
-    with c4:
-        kpi_card("🔴", "Vencidas", numero(vencidas), "Prioridad alta")
-
-    col_a, col_b = st.columns(2)
-    with col_a:
-        card_inicio()
-        grafico_donut(df, "Estado", "Estado del plan de acción")
-        card_fin()
-    with col_b:
-        card_inicio()
-        grafico_barra(df, "Origen", "Acciones por origen", orientacion="h")
-        card_fin()
-
-    panel_titulo("Detalle del plan de acción")
-    tabla_limpia(df, ["Fecha", "Origen", "Área", "Hallazgo", "Accion_Correctiva", "Responsable", "Fecha_Compromiso", "Estado", "Evidencia", "Observacion"])
-
-
-def pagina_capacitaciones(datos, filtros):
-    mostrar_sello_saivam_pagina()
-
-    # La vista utiliza la misma estructura y los mismos estados registrados en
-    # la pestaña "Capacitaciones" de Google Sheets.
-    df = aplicar_filtros(datos["Capacitaciones"], *filtros)
-
-    if df is not None and not df.empty:
-        df = df.sort_values("Fecha", ascending=True, na_position="last").copy()
-        estados = df["Estado"].apply(estado_base)
-        cerradas = int((estados == "Cerrada").sum())
-        pendientes = int((estados == "Pendiente").sum())
-        en_proceso = int((estados == "En proceso").sum())
-    else:
-        cerradas = 0
-        pendientes = 0
-        en_proceso = 0
-
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        kpi_card("🎓", "Capacitaciones", numero(len(df)), "Total programado")
-    with c2:
-        kpi_card("✅", "Cerradas", numero(cerradas), "Estado informado en Sheet")
-    with c3:
-        kpi_card("🟠", "Pendientes", numero(pendientes), "Estado informado en Sheet")
-    with c4:
-        kpi_card("🔵", "En proceso", numero(en_proceso), "Estado informado en Sheet")
-
-    col_a, col_b = st.columns(2)
-    with col_a:
-        card_inicio()
-        grafico_barra(df, "Tema", "Capacitaciones por tema", orientacion="h")
-        card_fin()
-    with col_b:
-        card_inicio()
-        grafico_donut(df, "Estado", "Estado de las capacitaciones")
-        card_fin()
-
-    panel_titulo("Detalle de capacitaciones")
-    tabla_limpia(
-        df,
-        [
-            "Fecha",
-            "Tema",
-            "Tipo",
-            "Área",
-            "Responsable",
-            "Vencimiento",
-            "Estado",
-            "Observacion",
-            "Evidencia",
-        ],
-    )
-
-
-def pagina_protocolos_minsal(datos, filtros):
-    mostrar_sello_saivam_pagina()
-
-    df = aplicar_filtros(datos["Protocolos_MINSAL"], *filtros)
-    total = len(df)
-    expuestos = int(df["Expuestos"].apply(limpiar_numero).sum()) if not df.empty and "Expuestos" in df.columns else 0
-    cerrados = int(df["Estado"].astype(str).str.contains("Cerrada", case=False, na=False).sum()) if not df.empty else 0
-    abiertos = int(df["Estado"].astype(str).str.contains("Pendiente|En proceso|Vencida", case=False, regex=True, na=False).sum()) if not df.empty else 0
-    protocolos = df["Protocolo"].nunique() if not df.empty and "Protocolo" in df.columns else 0
-
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        kpi_card("🦺", "Registros MINSAL", numero(total), "Evaluaciones y seguimientos")
-    with c2:
-        kpi_card("📑", "Protocolos controlados", numero(protocolos), "Tipos de protocolo")
-    with c3:
-        kpi_card("👥", "Trabajadores expuestos", numero(expuestos), "Expuestos registrados")
-    with c4:
-        kpi_card("⚠️", "Seguimientos abiertos", numero(abiertos), f"{cerrados} registros cerrados")
-
-    col_a, col_b = st.columns(2)
-    with col_a:
-        card_inicio()
-        grafico_barra(df, "Protocolo", "Registros por protocolo MINSAL", orientacion="h")
-        card_fin()
-    with col_b:
-        card_inicio()
-        grafico_donut(df, "Estado", "Estado de protocolos MINSAL")
-        card_fin()
-
-    panel_titulo("Detalle de Protocolos MINSAL")
-    tabla_limpia(
-        df,
-        ["Fecha", "Protocolo", "Etapa", "Área", "Actividad", "Expuestos", "Responsable", "Resultado", "Fecha_Compromiso", "Estado", "Evidencia", "Observacion"],
-    )
-
-
-def pagina_programa_anual(datos, filtros):
-    mostrar_sello_saivam_pagina()
-
-    df = datos.get("Programa_Anual", pd.DataFrame()).copy()
-    df = aplicar_filtros(df, *filtros)
-
-    if df is None or df.empty:
-        st.warning(
-            "No se encontraron registros en la pestaña PRG_SSO_2026. "
-            "Verifica que la hoja esté compartida como lector y que conserve "
-            "los encabezados definidos."
-        )
-        return
-
-    # Filtros propios del programa anual.
-    meses_presentes = {
-        str(valor).strip()
-        for valor in df.get("Mes", pd.Series(dtype=str)).dropna()
-        if str(valor).strip()
+    .main .block-container,
+    .block-container,
+    div[data-testid="stMainBlockContainer"],
+    section.main > div {
+        padding-top: 56px !important;
     }
-    meses_ordenados = [mes for mes in MESES.values() if mes in meses_presentes]
-    meses_extra = sorted(meses_presentes.difference(meses_ordenados))
 
-    ejes = sorted(
-        valor
-        for valor in df.get("Eje_Trabajo", pd.Series(dtype=str)).dropna().astype(str).str.strip().unique()
-        if valor
-    )
-    estados = sorted(
-        valor
-        for valor in df.get("Estado", pd.Series(dtype=str)).dropna().astype(str).str.strip().unique()
-        if valor
-    )
-
-    f1, f2, f3 = st.columns(3)
-    with f1:
-        filtro_mes = st.selectbox(
-            "Mes",
-            ["Todos", *meses_ordenados, *meses_extra],
-            key="prg_sso_filtro_mes",
-        )
-    with f2:
-        filtro_eje = st.selectbox(
-            "Eje de trabajo",
-            ["Todos", *ejes],
-            key="prg_sso_filtro_eje",
-        )
-    with f3:
-        filtro_estado = st.selectbox(
-            "Estado",
-            ["Todos", *estados],
-            key="prg_sso_filtro_estado",
-        )
-
-    if filtro_mes != "Todos":
-        df = df[df["Mes"].astype(str).eq(filtro_mes)]
-    if filtro_eje != "Todos":
-        df = df[df["Eje_Trabajo"].astype(str).eq(filtro_eje)]
-
-    # El avance a la fecha se calcula antes de aplicar el filtro Estado.
-    # Así el indicador conserva una base completa y no se transforma en 100 %
-    # cuando el usuario selecciona únicamente las actividades cerradas.
-    df_avance = df.copy()
-
-    if filtro_estado != "Todos":
-        df = df[df["Estado"].astype(str).eq(filtro_estado)]
-
-    total = len(df)
-    estados_norm = df["Estado"].fillna("").apply(normalizar_texto)
-    cerradas = int(estados_norm.eq("cerrada").sum())
-    pendientes = int(estados_norm.eq("pendiente").sum())
-    en_proceso = int(estados_norm.eq("en_proceso").sum())
-    cumplimiento = (cerradas / total * 100) if total else 0.0
-    tipos = df["Tipo_Actividad"].nunique() if "Tipo_Actividad" in df.columns else 0
-
-    # Fecha dinámica de Chile continental. Se recalcula en cada ejecución de
-    # la página, por lo que el corte avanza automáticamente con el calendario.
-    try:
-        hoy_programa = (
-            pd.Timestamp.now(tz="America/Santiago")
-            .tz_localize(None)
-            .normalize()
-        )
-    except Exception:
-        hoy_programa = pd.Timestamp.today().normalize()
-
-    fechas_programadas = pd.to_datetime(
-        df_avance.get("Fecha_Programada", pd.Series(index=df_avance.index, dtype="datetime64[ns]")),
-        errors="coerce",
-    )
-    actividades_hasta_hoy = fechas_programadas.notna() & (
-        fechas_programadas.dt.normalize() <= hoy_programa
-    )
-    programadas_a_fecha = int(actividades_hasta_hoy.sum())
-
-    estados_a_fecha = (
-        df_avance.loc[actividades_hasta_hoy, "Estado"]
-        .fillna("")
-        .apply(normalizar_texto)
-    )
-    cerradas_a_fecha = int(estados_a_fecha.eq("cerrada").sum())
-    avance_a_fecha = (
-        cerradas_a_fecha / programadas_a_fecha * 100
-        if programadas_a_fecha
-        else 0.0
-    )
-    fecha_corte = fecha_texto(hoy_programa)
-
-    c1, c2, c3, c4, c5 = st.columns(5)
-    with c1:
-        kpi_card(
-            "🗓️",
-            "Actividades programadas",
-            numero(total),
-            f"{tipos} tipos de actividad",
-        )
-    with c2:
-        kpi_card(
-            "✅",
-            "Actividades cerradas",
-            numero(cerradas),
-            f"{porcentaje(cumplimiento)} del total filtrado",
-        )
-    with c3:
-        kpi_card(
-            "🟠",
-            "Actividades pendientes",
-            numero(pendientes),
-            "Estado informado en Sheet",
-        )
-    with c4:
-        kpi_card(
-            "🔵",
-            "Actividades en proceso",
-            numero(en_proceso),
-            "Estado informado en Sheet",
-        )
-    with c5:
-        kpi_card(
-            "📈",
-            "Avance a la fecha",
-            porcentaje(avance_a_fecha),
-            (
-                f"{cerradas_a_fecha} de {programadas_a_fecha} cerradas "
-                f"al {fecha_corte}"
-            ),
-        )
-
-    col_a, col_b = st.columns(2)
-    with col_a:
-        card_inicio()
-        grafico_donut(df, "Estado", "Estado del programa anual")
-        card_fin()
-    with col_b:
-        card_inicio()
-        grafico_barra(
-            df,
-            "Eje_Trabajo",
-            "Actividades por eje de trabajo",
-            orientacion="h",
-        )
-        card_fin()
-
-    panel_titulo("Detalle del Programa Anual de Seguridad")
-    tabla_limpia(
-        df,
-        [
-            "Mes",
-            "Eje_Trabajo",
-            "Actividad",
-            "Tipo_Actividad",
-            "Fecha_Programada",
-            "Fecha_Realizacion",
-            "Responsable",
-            "Estado",
-            "Evidencia",
-            "Observacion",
-        ],
-        height=520,
-    )
-
-
-def pagina_reconocimientos(datos, filtros):
-    mostrar_sello_saivam_pagina()
-
-    df = aplicar_filtros(datos["Reconocimientos"], *filtros)
-
-    if df is None:
-        df = pd.DataFrame(columns=SHEETS["Reconocimientos"]["columnas"])
-
-    total = len(df)
-
-    # Identificar reconocimientos institucionales realizados a SAIVAM.
-    # Estos registros no se contabilizan como personas reconocidas.
-    if not df.empty and "Trabajador" in df.columns:
-        trabajador_normalizado = df["Trabajador"].fillna("").apply(normalizar_texto)
-
-        es_empresa = trabajador_normalizado.str.contains(
-            "saivam|empresa",
-            case=False,
-            regex=True,
-            na=False,
-        )
-
-        # Respaldo para registros donde SAIVAM fue escrito en el motivo
-        # o en la observación y no directamente en Trabajador.
-        if "Motivo" in df.columns:
-            motivo_normalizado = df["Motivo"].fillna("").apply(normalizar_texto)
-            es_empresa = es_empresa | motivo_normalizado.str.contains(
-                "empresa_saivam|reconocimiento_institucional",
-                case=False,
-                regex=True,
-                na=False,
-            )
-
-        if "Observacion" in df.columns:
-            observacion_normalizada = df["Observacion"].fillna("").apply(normalizar_texto)
-            es_empresa = es_empresa | observacion_normalizada.str.contains(
-                "empresa_saivam|reconocimiento_institucional",
-                case=False,
-                regex=True,
-                na=False,
-            )
-
-        personas_df = df.loc[~es_empresa].copy()
-        trabajadores = (
-            personas_df["Trabajador"]
-            .replace("", pd.NA)
-            .dropna()
-            .nunique()
-        )
-
-        # Contar cada registro corporativo, aunque corresponda a la misma empresa.
-        # En la base actual existen dos reconocimientos corporativos a SAIVAM.
-        reconocimientos_corporativos = int(es_empresa.sum())
-    else:
-        trabajadores = 0
-        reconocimientos_corporativos = 0
-
-    entregados = (
-        int(
-            df["Estado"]
-            .astype(str)
-            .str.contains(
-                "Cerrada|Entregada",
-                case=False,
-                regex=True,
-                na=False,
-            )
-            .sum()
-        )
-        if not df.empty and "Estado" in df.columns
-        else 0
-    )
-
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        kpi_card("🏆", "Reconocimientos", numero(total), "Registros del período")
-    with c2:
-        kpi_card("👷", "Personas reconocidas", numero(trabajadores), "Trabajadores destacados")
-    with c3:
-        kpi_card("✅", "Reconocimientos entregados", numero(entregados), "Registros cerrados")
-    with c4:
-        kpi_card("🏢", "Reconocimientos corporativos", numero(reconocimientos_corporativos), "Reconocimientos a SAIVAM")
-
-    mostrar_fotos_reconocimientos()
-
-    col_a, col_b = st.columns(2)
-    with col_a:
-        card_inicio()
-        grafico_barra(df, "Periodo", "Reconocimientos por período", orientacion="h")
-        card_fin()
-    with col_b:
-        card_inicio()
-        grafico_barra(df, "Cargo", "Reconocimientos por cargo", orientacion="h")
-        card_fin()
-
-    panel_titulo("Detalle de Reconocimientos")
-    tabla_limpia(
-        df,
-        ["Fecha", "Trabajador", "Cargo", "Motivo", "Periodo", "Estado", "Evidencia", "Observacion"],
-    )
-
-
-def pagina_comite_paritario(datos, filtros):
-    mostrar_sello_saivam_pagina()
-
-    df = aplicar_filtros(datos["Comite_Paritario"], *filtros)
-    total = len(df)
-    cerradas = int(df["Estado"].astype(str).str.contains("Cerrada", case=False, na=False).sum()) if not df.empty else 0
-    pendientes = int(df["Estado"].astype(str).str.contains("Pendiente|En proceso|Vencida", case=False, regex=True, na=False).sum()) if not df.empty else 0
-    vencidas = int(df["Estado"].astype(str).str.contains("Vencida", case=False, na=False).sum()) if not df.empty else 0
-    cumplimiento = (cerradas / total * 100) if total else 0
-
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        kpi_card("👥", "Reuniones y acuerdos", numero(total), "Registros del comité")
-    with c2:
-        kpi_card("✅", "Acuerdos cerrados", numero(cerradas), f"{porcentaje(cumplimiento)} de cumplimiento")
-    with c3:
-        kpi_card("⚠️", "Acuerdos pendientes", numero(pendientes), "Seguimiento requerido")
-    with c4:
-        kpi_card("🚨", "Acuerdos vencidos", numero(vencidas), "Prioridad de cierre")
-
-    col_a, col_b = st.columns(2)
-    with col_a:
-        card_inicio()
-        grafico_donut(df, "Estado", "Estado de acuerdos del comité")
-        card_fin()
-    with col_b:
-        card_inicio()
-        grafico_barra(df, "Tipo_Reunion", "Reuniones por tipo", orientacion="h")
-        card_fin()
-
-    panel_titulo("Detalle del Comité Paritario")
-    tabla_limpia(
-        df,
-        ["Fecha", "Tipo_Reunion", "Área", "Tema", "Acuerdo", "Responsable", "Fecha_Compromiso", "Estado", "Evidencia", "Observacion"],
-    )
-
-def pagina_trabajos_criticos(datos, filtros):
-    df = aplicar_filtros(datos["Trabajos_Criticos"], *filtros)
-    con_permiso = int(df["Permiso"].astype(str).str.contains("Si|Sí|Con permiso", case=False, regex=True, na=False).sum()) if not df.empty else 0
-    abiertos = int(df["Estado"].astype(str).str.contains("Pendiente|En proceso|Vencida", case=False, regex=True, na=False).sum()) if not df.empty else 0
-
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        kpi_card("🔒", "Trabajos críticos", numero(len(df)), "Registros del periodo")
-    with c2:
-        kpi_card("📝", "Con permiso", numero(con_permiso), "Permiso informado")
-    with c3:
-        kpi_card("⚠️", "Abiertos", numero(abiertos), "En seguimiento")
-    with c4:
-        tipos = df["Tipo_Trabajo"].nunique() if not df.empty and "Tipo_Trabajo" in df.columns else 0
-        kpi_card("📌", "Tipos de trabajo", numero(tipos), "Categorías críticas")
-
-    col_a, col_b = st.columns(2)
-    with col_a:
-        card_inicio()
-        grafico_barra(df, "Tipo_Trabajo", "Trabajos críticos por tipo", orientacion="h")
-        card_fin()
-    with col_b:
-        card_inicio()
-        grafico_donut(df, "Estado", "Estado de trabajos críticos")
-        card_fin()
-
-    panel_titulo("Detalle de trabajos críticos")
-    tabla_limpia(df, ["Fecha", "Área", "Tipo_Trabajo", "Actividad", "Responsable", "Permiso", "Estado", "Observacion"])
-
-
-def pagina_documentos(datos, filtros):
-    df = datos["Documentos"].copy()
-    if filtros[1] != "Todos" and "Año" in df.columns:
-        df = df[df["Año"] == filtros[1]]
-    if filtros[2] != "Todos" and "Mes" in df.columns:
-        df = df[df["Mes"] == filtros[2]]
-
-    vencidos = int(df["Estado"].astype(str).str.contains("Vencida", case=False, na=False).sum()) if not df.empty else 0
-    vigentes = int(df["Estado"].astype(str).str.contains("Cerrada|Vigente", case=False, regex=True, na=False).sum()) if not df.empty else 0
-    tipos = df["Tipo_Documento"].nunique() if not df.empty and "Tipo_Documento" in df.columns else 0
-
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        kpi_card("📁", "Documentos", numero(len(df)), "Registros SGS")
-    with c2:
-        kpi_card("✅", "Vigentes", numero(vigentes), "Documentos al día")
-    with c3:
-        kpi_card("⚠️", "Vencidos", numero(vencidos), "Requieren actualización")
-    with c4:
-        kpi_card("🗂️", "Tipos", numero(tipos), "Procedimientos, matrices, registros")
-
-    col_a, col_b = st.columns(2)
-    with col_a:
-        card_inicio()
-        grafico_barra(df, "Tipo_Documento", "Documentos por tipo", orientacion="h")
-        card_fin()
-    with col_b:
-        card_inicio()
-        grafico_donut(df, "Estado", "Estado documental")
-        card_fin()
-
-    panel_titulo("Detalle documentos SGS")
-    tabla_limpia(df, ["Tipo_Documento", "Nombre_Documento", "Version", "Fecha", "Vencimiento", "Estado", "Ruta_Link", "Observacion"])
-
-
-
-
-def pagina_certificaciones(datos, filtros):
-    mostrar_sello_saivam_pagina()
-
-    df = aplicar_filtros(datos["Certificaciones"], *filtros)
-
-    total = len(df)
-
-    if not df.empty and "Estado" in df.columns:
-        estados = df["Estado"].fillna("").apply(estado_base)
-        vigentes = int((estados == "Vigente").sum())
-        por_vencer = int((estados == "Por vencer").sum())
-        vencidas = int((estados == "Vencida").sum())
-    else:
-        vigentes = 0
-        por_vencer = 0
-        vencidas = 0
-
-    c1, c2, c3, c4 = st.columns(4)
-
-    with c1:
-        kpi_card(
-            "📜",
-            "Certificaciones",
-            numero(total),
-            "Registros totales",
-        )
-
-    with c2:
-        kpi_card(
-            "✅",
-            "Vigentes",
-            numero(vigentes),
-            "Más de 30 días de vigencia",
-        )
-
-    with c3:
-        kpi_card(
-            "⚠️",
-            "Por vencer",
-            numero(por_vencer),
-            "Vencen dentro de 30 días",
-        )
-
-    with c4:
-        kpi_card(
-            "🚨",
-            "Vencidas",
-            numero(vencidas),
-            "Requieren renovación",
-        )
-
-    mostrar_equipos_certificados(df)
-
-    col_a, col_b = st.columns(2)
-
-    with col_a:
-        card_inicio()
-        grafico_barra(
-            df,
-            "Categoria",
-            "Certificaciones por categoría",
-            orientacion="h",
-        )
-        card_fin()
-
-    with col_b:
-        card_inicio()
-        grafico_donut(
-            df,
-            "Estado",
-            "Estado de vigencia",
-        )
-        card_fin()
-
-    panel_titulo("Detalle de Certificaciones")
-
-    columnas = [
-        "Fecha",
-        "Categoria",
-        "Subcategoria",
-        "Nombre_Certificacion",
-        "Entidad_Emisora",
-        "Vencimiento",
-        "Estado",
-        "Dias_Para_Vencer",
-        "Ruta_Link",
-    ]
-
-    if df is None or df.empty:
-        st.info("Sin certificaciones para mostrar.")
-        return
-
-    mostrar = df[columnas].copy()
-    mostrar["Fecha"] = mostrar["Fecha"].apply(fecha_texto)
-    mostrar["Vencimiento"] = mostrar["Vencimiento"].apply(fecha_texto)
-
-    mostrar = mostrar.sort_values(
-        by="Dias_Para_Vencer",
-        ascending=True,
-        na_position="last",
-    )
-
-    mostrar = mostrar.rename(
-        columns={
-            "Categoria": "Categoría",
-            "Subcategoria": "Subcategoría",
-            "Nombre_Certificacion": "Nombre certificación",
-            "Entidad_Emisora": "Entidad emisora",
-            "Dias_Para_Vencer": "Días para vencer",
-            "Ruta_Link": "Ruta / link",
-        }
-    ).fillna("")
-
-    # Tabla HTML compacta para que las nueve columnas entren en la página.
-    st.markdown(
-        """
-<style>
-.cert-table-wrap {
-    width: 100%;
-    overflow-x: hidden;
-    border: 1px solid rgba(30, 180, 120, .42);
-    border-radius: 13px;
-    background: rgba(8, 13, 17, .94);
-}
-.cert-table {
-    width: 100%;
-    border-collapse: collapse;
-    table-layout: fixed;
-    font-size: clamp(8.5px, .58vw, 10.5px);
-    line-height: 1.05;
-}
-.cert-table th,
-.cert-table td {
-    box-sizing: border-box;
-    padding: 3px 4px !important;
-    border-right: 1px solid rgba(110, 125, 140, .18);
-    border-bottom: 1px solid rgba(110, 125, 140, .18);
-    text-align: left;
-    vertical-align: middle;
-    white-space: normal;
-    overflow-wrap: anywhere;
-}
-.cert-table th {
-    height: 25px;
-    background: #1b2029;
-    color: #b9bec8;
-    font-weight: 650;
-}
-.cert-table td {
-    height: 23px;
-    color: #f3f7f5;
-}
-.cert-table th:nth-child(1),
-.cert-table td:nth-child(1) { width: 7%; }
-.cert-table th:nth-child(2),
-.cert-table td:nth-child(2) { width: 8%; }
-.cert-table th:nth-child(3),
-.cert-table td:nth-child(3) { width: 13%; }
-.cert-table th:nth-child(4),
-.cert-table td:nth-child(4) { width: 22%; }
-.cert-table th:nth-child(5),
-.cert-table td:nth-child(5) { width: 17%; }
-.cert-table th:nth-child(6),
-.cert-table td:nth-child(6) { width: 8%; }
-.cert-table th:nth-child(7),
-.cert-table td:nth-child(7) { width: 8%; }
-.cert-table th:nth-child(8),
-.cert-table td:nth-child(8) {
-    width: 9%;
-    text-align: center;
-}
-.cert-table th:nth-child(9),
-.cert-table td:nth-child(9) {
-    width: 8%;
-    text-align: center;
+    .main-fixed-title,
+    .title-main {
+        font-size: clamp(20px, 6.4vw, 26px) !important;
+    }
+
+    .main-fixed-logo img,
+    .header-logo-box img {
+        width: 68px !important;
+        max-width: 68px !important;
+    }
+
+    [data-testid="stHorizontalBlock"]:has(.kpi-card) > [data-testid="column"] {
+        flex-basis: calc(50% - .28rem) !important;
+        width: calc(50% - .28rem) !important;
+        max-width: calc(50% - .28rem) !important;
+    }
+
+    .kpi-card {
+        min-height: 108px !important;
+        padding: 10px !important;
+    }
+
+    .kpi-value {
+        font-size: clamp(17px, 5.5vw, 22px) !important;
+    }
+
+    .tabla-clara {
+        min-width: 680px !important;
+    }
 }
 
-.cert-link-button {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 4px 8px;
-    border: 1px solid rgba(52, 211, 153, .60);
-    border-radius: 8px;
-    background: rgba(16, 185, 129, .14);
-    color: #A7F3D0 !important;
-    font-size: 9px;
-    font-weight: 800;
-    text-decoration: none !important;
-    white-space: nowrap;
-}
+/* =========================================================
+   TELÉFONO HORIZONTAL
+   ========================================================= */
+@media (min-width: 601px) and (max-width: 1024px)
+       and (orientation: landscape) and (max-height: 600px) {
 
-.cert-link-button:hover {
-    background: rgba(16, 185, 129, .28);
-    border-color: rgba(110, 231, 183, .90);
-    color: #ECFDF5 !important;
+    .main .block-container,
+    .block-container,
+    div[data-testid="stMainBlockContainer"],
+    section.main > div {
+        padding-top: 50px !important;
+        padding-left: 10px !important;
+        padding-right: 10px !important;
+    }
+
+    .main-fixed-header,
+    .header-principal {
+        min-height: 48px !important;
+        margin-bottom: 7px !important;
+    }
+
+    .main-fixed-title,
+    .title-main {
+        font-size: clamp(21px, 3.6vw, 28px) !important;
+    }
+
+    .main-fixed-logo img,
+    .header-logo-box img {
+        width: 78px !important;
+        max-width: 78px !important;
+    }
+
+    /* En horizontal se aprovecha el ancho con dos columnas generales. */
+    [data-testid="stHorizontalBlock"] > [data-testid="column"] {
+        flex: 1 1 calc(50% - .34rem) !important;
+        width: calc(50% - .34rem) !important;
+        max-width: calc(50% - .34rem) !important;
+    }
+
+    /* KPI: tres por fila. */
+    [data-testid="stHorizontalBlock"]:has(.kpi-card) > [data-testid="column"] {
+        flex: 1 1 calc(33.333% - .44rem) !important;
+        width: calc(33.333% - .44rem) !important;
+        max-width: calc(33.333% - .44rem) !important;
+    }
+
+    .kpi-card {
+        min-height: 100px !important;
+        padding: 10px 11px !important;
+    }
+
+    /* Equipos: dos por fila en horizontal. */
+    [data-testid="stHorizontalBlock"]:has(.equipo-card) > [data-testid="column"] {
+        flex: 1 1 calc(50% - .34rem) !important;
+        width: calc(50% - .34rem) !important;
+        max-width: calc(50% - .34rem) !important;
+    }
+
+    .equipo-img,
+    .equipo-img-placeholder {
+        height: 130px !important;
+        min-height: 130px !important;
+    }
+
+    [data-testid="stPlotlyChart"] {
+        min-height: 240px !important;
+    }
+
+    .panel-title,
+    .page-section-title,
+    .chart-title {
+        font-size: 18px !important;
+    }
 }
 </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    encabezados_html = "".join(
-        f"<th>{escape_html(columna)}</th>"
-        for columna in mostrar.columns
-    )
-
-    filas_html = []
-
-    for _, fila in mostrar.iterrows():
-        celdas = []
-
-        for columna in mostrar.columns:
-            valor = fila[columna]
-            texto = "" if pd.isna(valor) else str(valor).strip()
-
-            if columna == "Ruta / link":
-                if texto.lower().startswith(("http://", "https://")):
-                    contenido = (
-                        f'<a class="cert-link-button" '
-                        f'href="{escape_html(texto)}" '
-                        f'target="_blank" '
-                        f'rel="noopener noreferrer">'
-                        f'📄 Abrir'
-                        f'</a>'
-                    )
-                elif texto:
-                    contenido = escape_html(texto)
-                else:
-                    contenido = ""
-            else:
-                contenido = escape_html(texto)
-
-            celdas.append(f"<td>{contenido}</td>")
-
-        filas_html.append(
-            f"<tr>{''.join(celdas)}</tr>"
-        )
-
-    st.markdown(
-        (
-            '<div class="cert-table-wrap">'
-            '<table class="cert-table">'
-            f'<thead><tr>{encabezados_html}</tr></thead>'
-            f'<tbody>{"".join(filas_html)}</tbody>'
-            '</table>'
-            '</div>'
-        ),
-        unsafe_allow_html=True,
-    )
-
-    if por_vencer > 0 or vencidas > 0:
-        panel_titulo("Alertas de vencimiento")
-
-        alertas = df[
-            df["Estado"].isin(["Por vencer", "Vencida"])
-        ].copy()
-
-        alertas = alertas.sort_values(
-            by="Dias_Para_Vencer",
-            ascending=True,
-            na_position="last",
-        )
-
-        for _, fila in alertas.iterrows():
-            estado = str(fila.get("Estado", ""))
-            dias = fila.get("Dias_Para_Vencer", pd.NA)
-            nombre = fila.get("Nombre_Certificacion", "Certificación")
-            subcategoria = fila.get("Subcategoria", "")
-            vencimiento = fecha_texto(fila.get("Vencimiento"))
-
-            if estado == "Vencida":
-                detalle = (
-                    f"{subcategoria} · vencida el {vencimiento} "
-                    f"({abs(int(dias))} días de atraso)"
-                )
-            else:
-                detalle = (
-                    f"{subcategoria} · vence el {vencimiento} "
-                    f"({int(dias)} días restantes)"
-                )
-
-            st.markdown(
-                f"""
-<div class="alert-card">
-    <div class="alert-title">⚠️ {escape_html(nombre)}</div>
-    <div class="alert-sub">{escape_html(detalle)}</div>
-</div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-
-# =========================================================
-# APP PRINCIPAL
-# =========================================================
-
-aplicar_estilo()
-datos, archivo_excel, fuentes_datos = cargar_datos()
-
-logo_sidebar = obtener_logo_sidebar_html()
-st.sidebar.markdown(
-    f"""
-<div class="menu-brand">
-    <div class="menu-logo-shell">{logo_sidebar}</div>
-    <div>
-        <div class="menu-title">Sistema de Gestión<br>SSO</div>
-        <div class="menu-subtitle">SAIVAM · MULCHÉN</div>
-    </div>
-</div>
     """,
     unsafe_allow_html=True,
 )
 
-menu = st.sidebar.radio(
-    "Menú",
-    [
-        "🛡️ KPI SSO",
-        "🗓️ PRG SSO 2026",
-        "⚠️ Reportabilidad",
-        "🎯 Cumplimientos SSO",
-        "🎓 Capacitaciones",
-        "🏆 Reconocimientos",
-        "👥 Comité Paritario",
-        "🦺 Protocolos MINSAL",
-        "📊 Certificaciones",
-    ],
-    label_visibility="collapsed",
-)
-
-# Filtros ocultos.
-# Todas las páginas muestran la información completa disponible.
-filtros = ("Todas las áreas", "Todos", "Todos")
-
-st.sidebar.markdown(
-    f"""
-<div class="menu-footer-box">
-    <div class="menu-info">
-        <b>Contrato:</b> {escape_html(CONTRATO)}<br>
-        <b>Empresa:</b> {escape_html(EMPRESA)}<br>
-        <b>Versión:</b> {escape_html(VERSION)}
-    </div>
-</div>
-    """,
-    unsafe_allow_html=True,
-)
-
-
-logo_principal = obtener_logo_principal_html()
-st.markdown(
-    f"""
-<div class="app-topbar">
-    <div>
-        <div class="title-main">SEGUIMIENTO, CONTROL DE SEGURIDAD Y SALUD OCUPACIONAL.</div>
-        <div class="subtitle-main">Sistema de Gestión SSO SAIVAM Mulchén · Programa anual, reportabilidad, cumplimientos preventivos y seguimiento de la gestión.</div>
-    </div>
-    <div class="main-logo-card">{logo_principal}</div>
-</div>
-    """,
-    unsafe_allow_html=True,
-)
-
-if menu == "🛡️ KPI SSO":
-    pagina_panel_general(datos, filtros)
-elif menu == "🗓️ PRG SSO 2026":
-    pagina_programa_anual(datos, filtros)
-elif menu == "⚠️ Reportabilidad":
-    pagina_reportabilidad(datos, filtros)
-elif menu == "🎯 Cumplimientos SSO":
-    pagina_cumplimientos_sso(datos, filtros)
-elif menu == "🎓 Capacitaciones":
-    pagina_capacitaciones(datos, filtros)
-elif menu == "🏆 Reconocimientos":
-    pagina_reconocimientos(datos, filtros)
-elif menu == "👥 Comité Paritario":
-    pagina_comite_paritario(datos, filtros)
-elif menu == "🦺 Protocolos MINSAL":
-    pagina_protocolos_minsal(datos, filtros)
-elif menu == "📊 Certificaciones":
-    pagina_certificaciones(datos, filtros)
-
-st.markdown(
-    f"""
-<div class="footer-app footer-app-dos-lineas">
-    <div class="footer-titulo">Panel desarrollado por</div>
-    <div class="footer-detalle">
-        {escape_html(AUTOR)} – Administrador de Contrato |
-        María Araya – SSO |
-        {escape_html(EMPRESA)} – {escape_html(CONTRATO)} –
-        Versión {escape_html(VERSION)}
-    </div>
-</div>
-    """,
-    unsafe_allow_html=True,
-)
