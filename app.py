@@ -48,8 +48,8 @@ st.markdown(
 AUTOR = "Ricardo Grez"
 EMPRESA = "SAIVAM"
 CONTRATO = "CMPC Mulchén"
-VERSION = "1.4.18"
-REVISION_CODIGO = "23-07-2026-R44-AJUSTES-TITULOS-KPI-PRG"
+VERSION = "1.4.19"
+REVISION_CODIGO = "23-07-2026-R45-CUMPLIMIENTO-META-DIARIA"
 
 print(
     f"[SSO] Ejecutando archivo corregido: {os.path.abspath(__file__)} "
@@ -951,14 +951,57 @@ MESES_CORTOS = [
 # =========================================================
 # PERIODO AUTOMÁTICO PARA EL MÓDULO CUMPLIMIENTOS SSO
 # =========================================================
-# El corte se ajusta automáticamente al año y mes vigentes en Chile.
+# El corte se ajusta automáticamente a la fecha vigente en Chile.
+# Para el indicador "Acumulado al día", las metas de los meses cerrados se
+# consideran completas y la meta del mes vigente se prorratea según los días
+# calendario transcurridos. Así, los días futuros del mes no disminuyen el KPI.
 ANIO_CUMPLIMIENTOS = int(HOY.year)
 MES_CORTE_CUMPLIMIENTOS = int(HOY.month)
 MESES_CUMPLIMIENTOS = MESES_CORTOS[:MES_CORTE_CUMPLIMIENTOS]
 NOMBRE_MES_CORTE = MESES.get(MES_CORTE_CUMPLIMIENTOS, "")
-PERIODO_CUMPLIMIENTOS = f"Enero a {NOMBRE_MES_CORTE.lower()} de {ANIO_CUMPLIMIENTOS}"
-PERIODO_ANUAL_CUMPLIMIENTOS = f"Año completo {ANIO_CUMPLIMIENTOS}"
 FECHA_CORTE_CUMPLIMIENTOS = HOY.strftime("%d/%m/%Y")
+DIAS_MES_CUMPLIMIENTOS = int(HOY.days_in_month)
+DIAS_TRANSCURRIDOS_CUMPLIMIENTOS = int(HOY.day)
+FACTOR_MES_ACTUAL_CUMPLIMIENTOS = min(
+    1.0,
+    max(0.0, DIAS_TRANSCURRIDOS_CUMPLIMIENTOS / DIAS_MES_CUMPLIMIENTOS),
+)
+PERIODO_CUMPLIMIENTOS = f"Acumulado al {FECHA_CORTE_CUMPLIMIENTOS}"
+PERIODO_ANUAL_CUMPLIMIENTOS = f"Año completo {ANIO_CUMPLIMIENTOS}"
+
+
+def factor_meta_cumplimiento(mes, aplicar_corte_diario=True):
+    """Retorna el factor exigible de la meta mensual para el corte seleccionado."""
+    if not aplicar_corte_diario:
+        return 1.0
+
+    try:
+        numero_mes = MESES_CORTOS.index(str(mes)) + 1
+    except ValueError:
+        return 0.0
+
+    if numero_mes < MES_CORTE_CUMPLIMIENTOS:
+        return 1.0
+    if numero_mes == MES_CORTE_CUMPLIMIENTOS:
+        return FACTOR_MES_ACTUAL_CUMPLIMIENTOS
+    return 0.0
+
+
+def calcular_meta_exigible_cumplimiento(df, meses, aplicar_corte_diario=True):
+    """Suma la meta exigible de un DataFrame para el periodo seleccionado."""
+    if df is None or df.empty:
+        return 0.0
+
+    total = 0.0
+    for mes in meses:
+        valores = pd.to_numeric(df.get(mes, 0), errors="coerce")
+        if hasattr(valores, "fillna"):
+            valores = valores.fillna(0)
+            meta_mes = float(valores.sum())
+        else:
+            meta_mes = float(valores or 0)
+        total += meta_mes * factor_meta_cumplimiento(mes, aplicar_corte_diario)
+    return total
 
 
 def _es_texto_valido(valor):
@@ -4914,8 +4957,18 @@ def pagina_panel_general(datos, filtros):
         if not resumen.empty
         else pd.DataFrame()
     )
-    meta_corte = float(resumen_corte["Meta"].sum()) if not resumen_corte.empty else 0.0
-    real_corte = float(resumen_corte["Realizadas"].sum()) if not resumen_corte.empty else 0.0
+    if not resumen_corte.empty:
+        resumen_corte["Factor exigible"] = resumen_corte["Mes"].apply(
+            lambda mes: factor_meta_cumplimiento(mes, True)
+        )
+        resumen_corte["Meta exigible"] = (
+            resumen_corte["Meta"] * resumen_corte["Factor exigible"]
+        )
+        meta_corte = float(resumen_corte["Meta exigible"].sum())
+        real_corte = float(resumen_corte["Realizadas"].sum())
+    else:
+        meta_corte = 0.0
+        real_corte = 0.0
     porc_corte = (real_corte / meta_corte * 100) if meta_corte else 0.0
     observadores = (
         int(cumplimiento_df["Observador"].replace("", pd.NA).dropna().nunique())
@@ -5320,9 +5373,10 @@ def pagina_panel_general(datos, filtros):
         else:
             filas = []
             for observador, grupo in cumplimiento_df.groupby("Observador", dropna=False):
-                meta = sum(
-                    pd.to_numeric(grupo[m], errors="coerce").fillna(0).sum()
-                    for m in MESES_CUMPLIMIENTOS
+                meta = calcular_meta_exigible_cumplimiento(
+                    grupo,
+                    MESES_CUMPLIMIENTOS,
+                    aplicar_corte_diario=True,
                 )
                 real = sum(
                     pd.to_numeric(grupo[f"RE_{m}"], errors="coerce").fillna(0).sum()
@@ -5733,17 +5787,21 @@ iniciada, pero el proceso de Python no utiliza esa sesión.
 
     if seleccion_periodo == PERIODO_ANUAL_CUMPLIMIENTOS:
         meses_periodo = list(MESES_CORTOS)
+        aplicar_corte_diario = False
         detalle_periodo = (
             "Cálculo anual: total de actividades realizadas entre ENE y DIC "
             f"dividido por el total programado para todo {ANIO_CUMPLIMIENTOS}."
         )
     else:
         meses_periodo = list(MESES_CUMPLIMIENTOS)
+        aplicar_corte_diario = True
         detalle_periodo = (
-            f"Cálculo automático al {FECHA_CORTE_CUMPLIMIENTOS}: actividades "
-            f"realizadas entre ENE y {MESES_CORTOS[MES_CORTE_CUMPLIMIENTOS - 1]} "
-            "divididas por la meta programada del mismo periodo. "
-            "Los meses posteriores no afectan el indicador a la fecha."
+            f"Cálculo automático al {FECHA_CORTE_CUMPLIMIENTOS}: se consideran "
+            "las metas completas de los meses cerrados y la meta del mes vigente "
+            f"se prorratea por avance calendario ({DIAS_TRANSCURRIDOS_CUMPLIMIENTOS} "
+            f"de {DIAS_MES_CUMPLIMIENTOS} días = "
+            f"{FACTOR_MES_ACTUAL_CUMPLIMIENTOS * 100:.1f}%). "
+            "Los días futuros y los meses posteriores no disminuyen el indicador."
         )
 
     st.caption(detalle_periodo)
@@ -5763,7 +5821,11 @@ iniciada, pero el proceso de Python no utiliza esa sesión.
     # Periodo dinámico según la fecha actual o el año completo.
     reales_periodo = [f"RE_{mes}" for mes in meses_periodo]
 
-    meta_total = float(filtrado[meses_periodo].sum().sum())
+    meta_total = calcular_meta_exigible_cumplimiento(
+        filtrado,
+        meses_periodo,
+        aplicar_corte_diario=aplicar_corte_diario,
+    )
     real_total = float(filtrado[reales_periodo].sum().sum())
     pendientes = max(0.0, meta_total - real_total)
     cumplimiento_total = (real_total / meta_total * 100) if meta_total else 0.0
@@ -5788,7 +5850,7 @@ iniciada, pero el proceso de Python no utiliza esa sesión.
     with k2:
         kpi_card("✅", "Realizadas", numero(real_total), "Actividades ejecutadas")
     with k3:
-        kpi_card("🎯", "Programadas", numero(meta_total), "Meta del periodo")
+        kpi_card("🎯", "Meta exigible", numero(meta_total), "Meta acumulada a la fecha")
     with k4:
         kpi_card("⏳", "Pendientes", numero(pendientes), "Brecha respecto de la meta")
 
@@ -5797,7 +5859,11 @@ iniciada, pero el proceso de Python no utiliza esa sesión.
     # ------------------------------------------------------------------
     filas_persona = []
     for observador, grupo in filtrado.groupby("Observador", dropna=False):
-        meta = float(grupo[meses_periodo].sum().sum())
+        meta = calcular_meta_exigible_cumplimiento(
+            grupo,
+            meses_periodo,
+            aplicar_corte_diario=aplicar_corte_diario,
+        )
         real = float(grupo[reales_periodo].sum().sum())
         filas_persona.append({
             "Colaborador": observador,
@@ -5812,7 +5878,11 @@ iniciada, pero el proceso de Python no utiliza esa sesión.
 
     filas_actividad = []
     for actividad, grupo in filtrado.groupby("Actividad estándar", dropna=False):
-        meta = float(grupo[meses_periodo].sum().sum())
+        meta = calcular_meta_exigible_cumplimiento(
+            grupo,
+            meses_periodo,
+            aplicar_corte_diario=aplicar_corte_diario,
+        )
         real = float(grupo[reales_periodo].sum().sum())
         filas_actividad.append({
             "Actividad": actividad,
@@ -5895,13 +5965,16 @@ iniciada, pero el proceso de Python no utiliza esa sesión.
     # ------------------------------------------------------------------
     resumen_mes = []
     for mes in MESES_CORTOS:
-        meta = float(filtrado[mes].sum())
+        meta_mensual = float(filtrado[mes].sum())
+        factor_exigible = factor_meta_cumplimiento(mes, aplicar_corte_diario)
+        meta_exigible = meta_mensual * factor_exigible
         real = float(filtrado[f"RE_{mes}"].sum())
         resumen_mes.append({
             "Mes": mes,
-            "Meta": meta,
+            "Meta mensual": meta_mensual,
+            "Meta exigible": meta_exigible,
             "Realizadas": real,
-            "Cumplimiento": (real / meta * 100) if meta else 0.0,
+            "Cumplimiento": (real / meta_exigible * 100) if meta_exigible else 0.0,
         })
     resumen_mes = pd.DataFrame(resumen_mes)
     resumen_visible = resumen_mes[resumen_mes["Mes"].isin(meses_periodo)].copy()
@@ -5911,9 +5984,13 @@ iniciada, pero el proceso de Python no utiliza esa sesión.
         panel_titulo("Evolución mensual")
         fig = go.Figure()
         fig.add_trace(go.Bar(
-            x=resumen_visible["Mes"], y=resumen_visible["Meta"],
-            name="Programadas", opacity=.45,
-            hovertemplate="%{x}<br>Programadas: %{y:.0f}<extra></extra>",
+            x=resumen_visible["Mes"], y=resumen_visible["Meta exigible"],
+            name="Meta exigible", opacity=.45,
+            customdata=resumen_visible[["Meta mensual"]],
+            hovertemplate=(
+                "%{x}<br>Meta exigible: %{y:.1f}"
+                "<br>Meta mensual completa: %{customdata[0]:.0f}<extra></extra>"
+            ),
         ))
         fig.add_trace(go.Bar(
             x=resumen_visible["Mes"], y=resumen_visible["Realizadas"],
@@ -6017,13 +6094,15 @@ iniciada, pero el proceso de Python no utiliza esa sesión.
 
         for mes in meses_periodo:
             metas_mes = pd.to_numeric(filtrado[mes], errors="coerce").fillna(0)
+            factor_mes = factor_meta_cumplimiento(mes, aplicar_corte_diario)
+            metas_exigibles_mes = metas_mes * factor_mes
             realizadas_mes = pd.to_numeric(
                 filtrado[f"RE_{mes}"], errors="coerce"
             ).fillna(0)
 
             detalle[mes] = [
-                f"{real:.0f}/{meta:.0f} ({(real / meta * 100 if meta else 0):.0f}%)"
-                for meta, real in zip(metas_mes, realizadas_mes)
+                f"{real:.0f}/{meta:.1f} ({(real / meta * 100 if meta else 0):.0f}%)"
+                for meta, real in zip(metas_exigibles_mes, realizadas_mes)
             ]
 
         tabla_limpia(
@@ -6040,7 +6119,11 @@ iniciada, pero el proceso de Python no utiliza esa sesión.
             valores = []
 
             for mes in meses_periodo:
-                meta = _a_numero_cumplimiento(fila.get(mes, 0))
+                meta_mensual = _a_numero_cumplimiento(fila.get(mes, 0))
+                meta = meta_mensual * factor_meta_cumplimiento(
+                    mes,
+                    aplicar_corte_diario,
+                )
                 real = _a_numero_cumplimiento(fila.get(f"RE_{mes}", 0))
                 cumplimiento_mes = (real / meta * 100) if meta > 0 else 0.0
                 valores.append(cumplimiento_mes)
