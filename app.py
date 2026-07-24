@@ -48,7 +48,7 @@ st.markdown(
 AUTOR = "Ricardo Grez"
 EMPRESA = "SAIVAM"
 CONTRATO = "CMPC Mulchén"
-VERSION = "1.4.15"
+VERSION = "1.4.16"
 REVISION_CODIGO = "23-07-2026-R42-FECHA-AUTOMATICA"
 
 print(
@@ -6699,13 +6699,24 @@ def pagina_capacitaciones(datos, filtros):
         en_proceso = int((estados == "En proceso").sum())
         pendientes_en_proceso = pendientes + en_proceso
 
-        # El avance a la fecha considera solamente las capacitaciones cuya fecha
-        # programada ya llegó. Las actividades futuras no reducen el indicador.
-        fechas_capacitacion = pd.to_datetime(df["Fecha"], errors="coerce", dayfirst=True)
-        programadas_a_fecha = fechas_capacitacion.notna() & (fechas_capacitacion.dt.normalize() <= hoy_capacitaciones)
-        total_a_fecha = int(programadas_a_fecha.sum())
-        cerradas_a_fecha = int(((estados == "Cerrada") & programadas_a_fecha).sum())
-        avance_a_fecha = (cerradas_a_fecha / total_a_fecha * 100) if total_a_fecha else 0.0
+        # El avance se calcula usando la columna Vencimiento de la planilla y
+        # la fecha actual. Solo entran al cálculo las capacitaciones cuyo plazo
+        # vence hoy o ya venció; las capacitaciones con vencimiento futuro no
+        # disminuyen anticipadamente el indicador.
+        fechas_vencimiento = pd.to_datetime(
+            df["Vencimiento"], errors="coerce", dayfirst=True
+        )
+        exigibles_a_fecha = (
+            fechas_vencimiento.notna()
+            & (fechas_vencimiento.dt.normalize() <= hoy_capacitaciones)
+        )
+        total_a_fecha = int(exigibles_a_fecha.sum())
+        cerradas_a_fecha = int(((estados == "Cerrada") & exigibles_a_fecha).sum())
+        avance_a_fecha = (
+            cerradas_a_fecha / total_a_fecha * 100
+            if total_a_fecha
+            else 0.0
+        )
     else:
         cerradas = 0
         pendientes_en_proceso = 0
@@ -6732,7 +6743,7 @@ def pagina_capacitaciones(datos, filtros):
             "📈",
             "% de avance",
             porcentaje(avance_a_fecha),
-            f"Al {fecha_corte_texto} · {cerradas_a_fecha} de {total_a_fecha} programadas",
+            f"Al {fecha_corte_texto} · {cerradas_a_fecha} de {total_a_fecha} vencidas/exigibles",
         )
 
     col_a, col_b = st.columns(2)
