@@ -49,8 +49,8 @@ st.markdown(
 AUTOR = "Ricardo Grez"
 EMPRESA = "SAIVAM"
 CONTRATO = "CMPC Mulchén"
-VERSION = "1.4.22"
-REVISION_CODIGO = "24-07-2026-R47-RESUMEN-ACTIVIDADES-ENTEROS"
+VERSION = "1.4.23"
+REVISION_CODIGO = "24-07-2026-R48-COMITE-PARITARIO-AVANCE"
 
 print(
     f"[SSO] Ejecutando archivo corregido: {os.path.abspath(__file__)} "
@@ -7325,37 +7325,114 @@ def pagina_reconocimientos(datos, filtros):
 def pagina_comite_paritario(datos, filtros):
     mostrar_sello_saivam_pagina()
 
-    df = aplicar_filtros(datos["Comite_Paritario"], *filtros)
-    total = len(df)
-    cerradas = int(df["Estado"].astype(str).str.contains("Cerrada", case=False, na=False).sum()) if not df.empty else 0
-    pendientes = int(df["Estado"].astype(str).str.contains("Pendiente|En proceso|Vencida", case=False, regex=True, na=False).sum()) if not df.empty else 0
-    vencidas = int(df["Estado"].astype(str).str.contains("Vencida", case=False, na=False).sum()) if not df.empty else 0
-    cumplimiento = (cerradas / total * 100) if total else 0
+    df = aplicar_filtros(datos["Comite_Paritario"], *filtros).copy()
 
-    c1, c2, c3, c4 = st.columns(4)
+    # Ordena cronológicamente las actividades para facilitar su seguimiento.
+    columnas_orden = [
+        columna
+        for columna in ["Fecha", "Fecha_Compromiso", "Tipo_Reunion", "Tema"]
+        if columna in df.columns
+    ]
+    if columnas_orden:
+        df = df.sort_values(
+            by=columnas_orden,
+            ascending=True,
+            na_position="last",
+        ).reset_index(drop=True)
+
+    total = int(len(df))
+
+    # Separa cada estado para evitar que "pendientes" mezcle actividades
+    # en proceso o vencidas. La base ya viene normalizada desde Google Sheets.
+    if not df.empty and "Estado" in df.columns:
+        estados = df["Estado"].fillna("").apply(estado_base)
+    else:
+        estados = pd.Series(dtype="object")
+
+    cerradas = int(estados.eq("Cerrada").sum())
+    en_proceso = int(estados.eq("En proceso").sum())
+    pendientes = int(estados.eq("Pendiente").sum())
+    vencidas = int(estados.eq("Vencida").sum())
+
+    avance = (cerradas / total * 100) if total else 0.0
+    avance_texto = f"{avance:.1f}%".replace(".", ",")
+
+    panel_titulo("Resumen Ejecutivo del Comité Paritario")
+
+    # Primera fila: visión general y avance del programa.
+    c1, c2, c3 = st.columns(3)
     with c1:
-        kpi_card("👥", "Reuniones y acuerdos", numero(total), "Registros del comité")
+        kpi_card(
+            "👥",
+            "Total de actividades",
+            numero(total),
+            "Registros programados del CPHS",
+        )
     with c2:
-        kpi_card("✅", "Acuerdos cerrados", numero(cerradas), f"{porcentaje(cumplimiento)} de cumplimiento")
+        kpi_card(
+            "✅",
+            "Actividades cerradas",
+            numero(cerradas),
+            "Actividades con gestión finalizada",
+        )
     with c3:
-        kpi_card("⚠️", "Acuerdos pendientes", numero(pendientes), "Seguimiento requerido")
-    with c4:
-        kpi_card("🚨", "Acuerdos vencidos", numero(vencidas), "Prioridad de cierre")
+        kpi_card(
+            "📈",
+            "Avance del programa",
+            avance_texto,
+            f"{numero(cerradas)} de {numero(total)} actividades cerradas",
+        )
 
+    # Segunda fila: desglose de las actividades que requieren seguimiento.
+    c4, c5, c6 = st.columns(3)
+    with c4:
+        kpi_card(
+            "🟠",
+            "Actividades en proceso",
+            numero(en_proceso),
+            "Gestiones actualmente en desarrollo",
+        )
+    with c5:
+        kpi_card(
+            "⚠️",
+            "Actividades pendientes",
+            numero(pendientes),
+            "Actividades aún no iniciadas",
+        )
+    with c6:
+        kpi_card(
+            "🚨",
+            "Actividades vencidas",
+            numero(vencidas),
+            "Prioridad de regularización y cierre",
+        )
+
+    panel_titulo("Distribución de Actividades del CPHS")
     col_a, col_b = st.columns(2)
     with col_a:
         card_inicio()
-        grafico_donut(df, "Estado", "Estado de acuerdos del comité")
+        grafico_donut(df, "Estado", "Estado de actividades del Comité Paritario")
         card_fin()
     with col_b:
         card_inicio()
-        grafico_barra(df, "Tipo_Reunion", "Reuniones por tipo", orientacion="h")
+        grafico_barra(df, "Tipo_Reunion", "Actividades por tipo", orientacion="h")
         card_fin()
 
-    panel_titulo("Detalle del Comité Paritario")
+    panel_titulo("Detalle de Actividades del Comité Paritario")
     tabla_limpia(
         df,
-        ["Fecha", "Tipo_Reunion", "Área", "Tema", "Acuerdo", "Responsable", "Fecha_Compromiso", "Estado", "Evidencia", "Observacion"],
+        [
+            "Fecha",
+            "Tipo_Reunion",
+            "Área",
+            "Tema",
+            "Acuerdo",
+            "Responsable",
+            "Fecha_Compromiso",
+            "Estado",
+            "Evidencia",
+            "Observacion",
+        ],
     )
 
 def pagina_trabajos_criticos(datos, filtros):
