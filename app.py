@@ -48,8 +48,8 @@ st.markdown(
 AUTOR = "Ricardo Grez"
 EMPRESA = "SAIVAM"
 CONTRATO = "CMPC Mulchén"
-VERSION = "1.4.16"
-REVISION_CODIGO = "23-07-2026-R42-FECHA-AUTOMATICA"
+VERSION = "1.4.17"
+REVISION_CODIGO = "23-07-2026-R43-KPI-EJECUTIVO"
 
 print(
     f"[SSO] Ejecutando archivo corregido: {os.path.abspath(__file__)} "
@@ -4881,410 +4881,468 @@ def resumen_mensual_cumplimientos(df):
 
 
 def pagina_panel_general(datos, filtros):
+    """Panel ejecutivo con corte diario y resumen de los módulos principales."""
     sello_agua = obtener_sello_agua_html()
     if sello_agua:
         st.markdown(sello_agua, unsafe_allow_html=True)
 
+    hoy_panel = fecha_actual_chile()
+    anio_panel = int(hoy_panel.year)
+    fecha_corte = fecha_texto(hoy_panel)
+
     cumplimiento_df = datos.get("Cumplimientos_SSO", pd.DataFrame()).copy()
     incidentes = datos.get("Incidentes", pd.DataFrame()).copy()
     capacitaciones = datos.get("Capacitaciones", pd.DataFrame()).copy()
+    programa = datos.get("Programa_Anual", pd.DataFrame()).copy()
+    reconocimientos = datos.get("Reconocimientos", pd.DataFrame()).copy()
+    certificaciones = datos.get("Certificaciones", pd.DataFrame()).copy()
     config = datos.get("Configuracion", pd.DataFrame())
 
+    # =============================================================
+    # CÁLCULOS EJECUTIVOS CON CORTE A LA FECHA ACTUAL
+    # =============================================================
     dias, fecha_inicio = dias_sin_accidentes(config, incidentes)
-    resumen = resumen_mensual_cumplimientos(cumplimiento_df) if not cumplimiento_df.empty else pd.DataFrame()
+
+    # Cumplimientos SSO acumulados hasta el mes vigente.
+    resumen = (
+        resumen_mensual_cumplimientos(cumplimiento_df)
+        if cumplimiento_df is not None and not cumplimiento_df.empty
+        else pd.DataFrame()
+    )
     resumen_corte = (
         resumen[resumen["Mes"].isin(MESES_CUMPLIMIENTOS)].copy()
         if not resumen.empty
         else pd.DataFrame()
     )
-
-    # Todos los KPI usan el corte automático hasta el mes vigente.
-    meta_corte = float(resumen_corte["Meta"].sum()) if not resumen_corte.empty else 0
-    real_corte = float(resumen_corte["Realizadas"].sum()) if not resumen_corte.empty else 0
-    porc_corte = (real_corte / meta_corte * 100) if meta_corte else 0
-    observadores = cumplimiento_df["Observador"].nunique() if not cumplimiento_df.empty else 0
-
-    accidentes = 0
-    if not incidentes.empty and "Tipo_Evento" in incidentes.columns:
-        tipos = incidentes["Tipo_Evento"].apply(normalizar_texto)
-        accidentes = int((tipos.str.contains("accidente", na=False) & ~tipos.str.contains("cuasi", na=False)).sum())
-
-    c1, c2, c3, c4, c5 = st.columns(5, gap="medium")
-    with c1:
-        kpi_card("🛡️", "Días sin accidentes", numero(dias), f"Desde {fecha_texto(fecha_inicio)}")
-    with c2:
-        kpi_card("👷", "Observadores", numero(observadores), "Personas con meta asignada")
-    with c3:
-        kpi_card("✅", "Actividades realizadas", numero(real_corte), f"Meta a {NOMBRE_MES_CORTE.lower()}: {numero(meta_corte)}")
-    with c4:
-        kpi_card("📈", "% cumplimiento", f"{porc_corte:.0f}%", PERIODO_CUMPLIMIENTOS)
-    with c5:
-        kpi_card("🚨", "Accidentes registrados", numero(accidentes), "Registros del año")
-
-    col1, col2 = st.columns([1.15, 1], gap="large")
-    with col1:
-        panel_titulo("Meta versus resultado mensual")
-        if resumen.empty:
-            st.info("Sin datos en la hoja Cumplimientos SSO.")
-        else:
-            fig = go.Figure()
-            fig.add_bar(x=resumen_corte["Mes"], y=resumen_corte["Meta"], name="Meta")
-            fig.add_bar(x=resumen_corte["Mes"], y=resumen_corte["Realizadas"], name="Realizadas")
-            fig.update_layout(barmode="group", xaxis_title="Mes", yaxis_title="Cantidad")
-            st.plotly_chart(aplicar_layout_fig(fig, height=390), use_container_width=True)
-
-    with col2:
-        panel_titulo("Cumplimiento mensual")
-        if resumen.empty:
-            st.info("Sin datos para graficar.")
-        else:
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(
-                x=resumen_corte["Mes"], y=resumen_corte["Cumplimiento"],
-                mode="lines+markers+text",
-                text=[f"{v:.0f}%" for v in resumen_corte["Cumplimiento"]],
-                textposition="top center", name="Cumplimiento",
-            ))
-            fig.add_hline(y=100, line_dash="dash", annotation_text="Meta 100%")
-            fig.update_yaxes(title="Cumplimiento (%)", rangemode="tozero")
-            st.plotly_chart(aplicar_layout_fig(fig, height=390), use_container_width=True)
-
-    panel_titulo("Resumen por observador")
-    if cumplimiento_df.empty:
-        st.info("Sin registros para mostrar.")
-    else:
-        filas = []
-        for observador, grupo in cumplimiento_df.groupby("Observador", dropna=False):
-            meta = sum(
-                pd.to_numeric(grupo[m], errors="coerce").fillna(0).sum()
-                for m in MESES_CUMPLIMIENTOS
-            )
-            real = sum(
-                pd.to_numeric(grupo[f"RE_{m}"], errors="coerce").fillna(0).sum()
-                for m in MESES_CUMPLIMIENTOS
-            )
-            filas.append({
-                "Observador": observador,
-                "Meta ene-jul": meta,
-                "Realizadas": real,
-                "Cumplimiento": f"{(real / meta * 100) if meta else 0:.0f}%",
-            })
-        tabla_limpia(
-            pd.DataFrame(filas),
-            ["Observador", "Meta ene-jul", "Realizadas", "Cumplimiento"],
-            centrar_todo=True,
-        )
-
-    # =============================================================
-    # INFORMACIÓN AGREGADA: CERTIFICACIONES Y RECONOCIMIENTOS
-    # =============================================================
-    certificaciones_df = datos.get("Certificaciones", pd.DataFrame()).copy()
-    reconocimientos_df = datos.get("Reconocimientos", pd.DataFrame()).copy()
-
-    if certificaciones_df is None:
-        certificaciones_df = pd.DataFrame()
-    if reconocimientos_df is None:
-        reconocimientos_df = pd.DataFrame()
-
-    # Conserva solamente registros reales de certificaciones.
-    if not certificaciones_df.empty:
-        columnas_clave_cert = [
-            columna
-            for columna in [
-                "Categoria",
-                "Subcategoria",
-                "Nombre_Certificacion",
-                "Vencimiento",
-            ]
-            if columna in certificaciones_df.columns
-        ]
-        if columnas_clave_cert:
-            mascara_cert = pd.Series(False, index=certificaciones_df.index)
-            for columna in columnas_clave_cert:
-                mascara_cert = mascara_cert | (
-                    certificaciones_df[columna]
-                    .fillna("")
-                    .astype(str)
-                    .str.strip()
-                    .ne("")
-                )
-            certificaciones_df = certificaciones_df.loc[mascara_cert].copy()
-
-    total_certificaciones = len(certificaciones_df)
-    vigentes_certificaciones = 0
-    por_vencer_certificaciones = 0
-    vencidas_certificaciones = 0
-
-    if not certificaciones_df.empty:
-        if "Estado" in certificaciones_df.columns:
-            estados_cert = certificaciones_df["Estado"].fillna("").apply(estado_base)
-        else:
-            estados_cert = pd.Series("Sin estado", index=certificaciones_df.index)
-
-        vigentes_certificaciones = int((estados_cert == "Vigente").sum())
-        por_vencer_certificaciones = int((estados_cert == "Por vencer").sum())
-        vencidas_certificaciones = int((estados_cert == "Vencida").sum())
-        certificaciones_df["Estado"] = estados_cert
-
-    cobertura_certificaciones = (
-        (vigentes_certificaciones + por_vencer_certificaciones)
-        / total_certificaciones
-        * 100
-        if total_certificaciones
+    meta_corte = float(resumen_corte["Meta"].sum()) if not resumen_corte.empty else 0.0
+    real_corte = float(resumen_corte["Realizadas"].sum()) if not resumen_corte.empty else 0.0
+    porc_corte = (real_corte / meta_corte * 100) if meta_corte else 0.0
+    observadores = (
+        int(cumplimiento_df["Observador"].replace("", pd.NA).dropna().nunique())
+        if cumplimiento_df is not None
+        and not cumplimiento_df.empty
+        and "Observador" in cumplimiento_df.columns
         else 0
     )
 
-    proximo_dias = None
-    proximo_elemento = "Sin vencimientos registrados"
-    proximos_vencimientos = pd.DataFrame()
-
-    if not certificaciones_df.empty and "Vencimiento" in certificaciones_df.columns:
-        certificaciones_df["Vencimiento"] = certificaciones_df["Vencimiento"].apply(convertir_fecha)
-        certificaciones_df["Días restantes"] = certificaciones_df["Vencimiento"].apply(
-            lambda fecha: int((fecha.normalize() - HOY).days) if pd.notna(fecha) else pd.NA
-        )
-        proximos_vencimientos = certificaciones_df[
-            certificaciones_df["Días restantes"].notna()
-            & (certificaciones_df["Días restantes"] >= 0)
+    # Programa anual: solo actividades programadas hasta el día de corte.
+    if programa is None:
+        programa = pd.DataFrame()
+    if not programa.empty:
+        programa = programa.copy()
+        programa["Fecha_Programada"] = programa["Fecha_Programada"].apply(convertir_fecha)
+        estados_prg = programa["Estado"].apply(estado_base)
+        fechas_prg = programa["Fecha_Programada"]
+        prg_anual = programa[
+            fechas_prg.dt.year.eq(anio_panel)
         ].copy()
-        proximos_vencimientos = proximos_vencimientos.sort_values(
-            "Días restantes",
-            ascending=True,
-        )
-
-        if not proximos_vencimientos.empty:
-            primera_cert = proximos_vencimientos.iloc[0]
-            proximo_dias = int(primera_cert["Días restantes"])
-            proximo_elemento = str(
-                primera_cert.get("Subcategoria", "")
-                or primera_cert.get("Nombre_Certificacion", "")
-                or "Certificación"
-            ).strip()
-
-    # Reconocimientos del año vigente, alineados con la fecha actual.
-    if not reconocimientos_df.empty and "Fecha" in reconocimientos_df.columns:
-        reconocimientos_df["Fecha"] = reconocimientos_df["Fecha"].apply(convertir_fecha)
-        reconocimientos_2026 = reconocimientos_df[
-            reconocimientos_df["Fecha"].dt.year.eq(int(HOY.year))
+        estados_prg_anual = estados_prg.loc[prg_anual.index]
+        prg_exigible = prg_anual[
+            prg_anual["Fecha_Programada"].notna()
+            & (prg_anual["Fecha_Programada"].dt.normalize() <= hoy_panel)
         ].copy()
+        estados_prg_exigible = estados_prg.loc[prg_exigible.index]
+        total_prg_anual = int(len(prg_anual))
+        total_prg_exigible = int(len(prg_exigible))
+        cerradas_prg = int((estados_prg_exigible == "Cerrada").sum())
+        seguimiento_prg = int((estados_prg_exigible != "Cerrada").sum())
+        avance_prg = (
+            cerradas_prg / total_prg_exigible * 100
+            if total_prg_exigible
+            else 0.0
+        )
     else:
-        reconocimientos_2026 = reconocimientos_df.copy()
+        total_prg_anual = 0
+        total_prg_exigible = 0
+        cerradas_prg = 0
+        seguimiento_prg = 0
+        avance_prg = 0.0
 
-    # Elimina filas visualmente vacías de la hoja.
-    if not reconocimientos_2026.empty:
-        columnas_clave_rec = [
-            columna
-            for columna in ["Trabajador", "Motivo", "Periodo", "Estado"]
-            if columna in reconocimientos_2026.columns
-        ]
-        if columnas_clave_rec:
-            mascara_rec = pd.Series(False, index=reconocimientos_2026.index)
-            for columna in columnas_clave_rec:
-                mascara_rec = mascara_rec | (
-                    reconocimientos_2026[columna]
-                    .fillna("")
-                    .astype(str)
-                    .str.strip()
-                    .ne("")
-                )
-            reconocimientos_2026 = reconocimientos_2026.loc[mascara_rec].copy()
+    # Reportabilidad del año vigente.
+    if incidentes is None:
+        incidentes = pd.DataFrame()
+    if not incidentes.empty:
+        incidentes = incidentes.copy()
+        incidentes["Fecha"] = incidentes["Fecha"].apply(convertir_fecha)
+        reportes_anio = incidentes[
+            incidentes["Fecha"].dt.year.eq(anio_panel)
+            & (incidentes["Fecha"].dt.normalize() <= hoy_panel)
+        ].copy()
+        estados_reportes = reportes_anio["Estado"].apply(estado_base)
+        total_reportes = int(len(reportes_anio))
+        reportes_cerrados = int((estados_reportes == "Cerrada").sum())
+        reportes_abiertos = int((estados_reportes != "Cerrada").sum())
+        reportes_vencidos = int((estados_reportes == "Vencida").sum())
 
-    total_reconocimientos = len(reconocimientos_2026)
-    reconocimientos_entregados = 0
-    reconocimientos_corporativos = 0
-    personas_reconocidas = 0
-
-    if not reconocimientos_2026.empty:
-        if "Estado" in reconocimientos_2026.columns:
-            reconocimientos_entregados = int(
-                reconocimientos_2026["Estado"]
-                .fillna("")
-                .astype(str)
-                .str.contains("cerrada|entregada|realizada", case=False, regex=True, na=False)
-                .sum()
+        if "Tipo_Evento" in reportes_anio.columns:
+            tipos = reportes_anio["Tipo_Evento"].apply(normalizar_texto)
+            accidentes = int(
+                (
+                    tipos.str.contains("accidente", na=False)
+                    & ~tipos.str.contains("cuasi", na=False)
+                ).sum()
             )
+        else:
+            accidentes = 0
+    else:
+        reportes_anio = pd.DataFrame()
+        total_reportes = 0
+        reportes_cerrados = 0
+        reportes_abiertos = 0
+        reportes_vencidos = 0
+        accidentes = 0
 
-        es_corporativo = pd.Series(False, index=reconocimientos_2026.index)
-        for columna in ["Trabajador", "Cargo", "Motivo", "Observacion"]:
-            if columna in reconocimientos_2026.columns:
-                texto_columna = reconocimientos_2026[columna].fillna("").apply(normalizar_texto)
-                es_corporativo = es_corporativo | texto_columna.str.contains(
-                    "empresa_saivam|reconocimiento_institucional|equipo_saivam",
-                    regex=True,
-                    na=False,
-                )
+    # Capacitaciones: avance según fecha de vencimiento de la planilla.
+    if capacitaciones is None:
+        capacitaciones = pd.DataFrame()
+    if not capacitaciones.empty:
+        capacitaciones = capacitaciones.copy()
+        fechas_vencimiento = capacitaciones["Vencimiento"].apply(convertir_fecha)
+        estados_cap = capacitaciones["Estado"].apply(estado_base)
+        cap_anual = capacitaciones[
+            fechas_vencimiento.dt.year.eq(anio_panel)
+        ].copy()
+        estados_cap_anual = estados_cap.loc[cap_anual.index]
+        fechas_cap_anual = fechas_vencimiento.loc[cap_anual.index]
+        cap_exigible = (
+            fechas_cap_anual.notna()
+            & (fechas_cap_anual.dt.normalize() <= hoy_panel)
+        )
+        total_cap_anual = int(len(cap_anual))
+        total_cap_exigible = int(cap_exigible.sum())
+        cerradas_cap = int(
+            ((estados_cap_anual == "Cerrada") & cap_exigible).sum()
+        )
+        seguimiento_cap = int(
+            ((estados_cap_anual != "Cerrada") & cap_exigible).sum()
+        )
+        avance_cap = (
+            cerradas_cap / total_cap_exigible * 100
+            if total_cap_exigible
+            else 0.0
+        )
+    else:
+        total_cap_anual = 0
+        total_cap_exigible = 0
+        cerradas_cap = 0
+        seguimiento_cap = 0
+        avance_cap = 0.0
 
-        reconocimientos_corporativos = int(es_corporativo.sum())
+    # Certificaciones con estado calculado según el vencimiento vigente.
+    if certificaciones is None:
+        certificaciones = pd.DataFrame()
+    if not certificaciones.empty:
+        certificaciones = preparar_certificaciones(certificaciones.copy())
+        estados_cert = certificaciones["Estado"].apply(estado_base)
+        total_certificaciones = int(len(certificaciones))
+        vigentes_certificaciones = int((estados_cert == "Vigente").sum())
+        por_vencer_certificaciones = int((estados_cert == "Por vencer").sum())
+        vencidas_certificaciones = int((estados_cert == "Vencida").sum())
+        certificaciones_en_regla = vigentes_certificaciones + por_vencer_certificaciones
+        cobertura_certificaciones = (
+            certificaciones_en_regla / total_certificaciones * 100
+            if total_certificaciones
+            else 0.0
+        )
 
-        if "Trabajador" in reconocimientos_2026.columns:
-            personas_reconocidas = int(
-                reconocimientos_2026.loc[~es_corporativo, "Trabajador"]
+        proximas_cert = certificaciones[
+            certificaciones["Vencimiento"].notna()
+            & (certificaciones["Vencimiento"].dt.normalize() >= hoy_panel)
+        ].copy()
+        proximas_cert["Días restantes"] = proximas_cert["Vencimiento"].apply(
+            lambda fecha: int((fecha.normalize() - hoy_panel).days)
+        )
+        proximas_cert = proximas_cert.sort_values("Días restantes")
+        if not proximas_cert.empty:
+            prox = proximas_cert.iloc[0]
+            proximo_vencimiento_texto = (
+                f"{int(prox['Días restantes'])} días · "
+                f"{str(prox.get('Subcategoria', '') or prox.get('Nombre_Certificacion', '')).strip()}"
+            )
+        else:
+            proximo_vencimiento_texto = "Sin próximos vencimientos"
+    else:
+        total_certificaciones = 0
+        vigentes_certificaciones = 0
+        por_vencer_certificaciones = 0
+        vencidas_certificaciones = 0
+        certificaciones_en_regla = 0
+        cobertura_certificaciones = 0.0
+        proximo_vencimiento_texto = "Sin datos"
+
+    # Reconocimientos registrados y ejecutados hasta la fecha actual.
+    if reconocimientos is None:
+        reconocimientos = pd.DataFrame()
+    if not reconocimientos.empty:
+        reconocimientos = reconocimientos.copy()
+        reconocimientos["Fecha"] = reconocimientos["Fecha"].apply(convertir_fecha)
+        reconocimientos_corte = reconocimientos[
+            reconocimientos["Fecha"].dt.year.eq(anio_panel)
+            & (reconocimientos["Fecha"].dt.normalize() <= hoy_panel)
+        ].copy()
+        estados_rec = reconocimientos_corte["Estado"].apply(estado_base)
+        total_reconocimientos = int(len(reconocimientos_corte))
+        reconocimientos_entregados = int((estados_rec == "Cerrada").sum())
+        personas_reconocidas = (
+            int(
+                reconocimientos_corte["Trabajador"]
                 .replace("", pd.NA)
                 .dropna()
                 .nunique()
             )
+            if "Trabajador" in reconocimientos_corte.columns
+            else 0
+        )
+    else:
+        reconocimientos_corte = pd.DataFrame()
+        total_reconocimientos = 0
+        reconocimientos_entregados = 0
+        personas_reconocidas = 0
 
-    panel_titulo("Certificaciones y reconocimientos")
-
+    # =============================================================
+    # PRESENTACIÓN DEL PANEL
+    # =============================================================
     st.markdown(
-        "<div class='subsection-label notranslate' translate='no'>Estado de certificaciones</div>",
+        f"""
+        <div class="notranslate" translate="no" style="
+            margin: 2px 0 15px 0;
+            padding: 13px 17px;
+            border: 1px solid rgba(52,211,153,.28);
+            border-radius: 14px;
+            background: linear-gradient(135deg, rgba(4,25,18,.86), rgba(2,10,8,.74));
+            color: #B7E4D0;
+            font-size: 13px;
+            line-height: 1.45;
+        ">
+            <strong style="color:#D1FAE5; font-size:15px;">Resumen ejecutivo SSO</strong><br>
+            Consolidado de gestión preventiva con corte automático al <strong>{fecha_corte}</strong>.
+            El mes vigente se presenta de forma parcial y se actualiza diariamente.
+        </div>
+        """,
         unsafe_allow_html=True,
     )
-    cc1, cc2, cc3, cc4 = st.columns(4, gap="medium")
-    with cc1:
+
+    # Seis indicadores estratégicos, uno por cada módulo considerado.
+    c1, c2, c3 = st.columns(3, gap="medium")
+    with c1:
+        kpi_card(
+            "🛡️",
+            "Días sin accidentes",
+            numero(dias),
+            f"Desde {fecha_texto(fecha_inicio)} · corte {fecha_corte}",
+        )
+    with c2:
+        kpi_card(
+            "📈",
+            "Cumplimiento SSO",
+            porcentaje(porc_corte),
+            f"{numero(real_corte)} realizadas de {numero(meta_corte)} · {PERIODO_CUMPLIMIENTOS}",
+        )
+    with c3:
+        kpi_card(
+            "📋",
+            "Avance PRG SSO",
+            porcentaje(avance_prg),
+            f"{cerradas_prg} de {total_prg_exigible} actividades exigibles al {fecha_corte}",
+        )
+
+    c4, c5, c6 = st.columns(3, gap="medium")
+    with c4:
+        kpi_card(
+            "🎓",
+            "Avance capacitaciones",
+            porcentaje(avance_cap),
+            f"{cerradas_cap} de {total_cap_exigible} vencidas/exigibles al {fecha_corte}",
+        )
+    with c5:
+        kpi_card(
+            "📝",
+            "Reportes abiertos",
+            numero(reportes_abiertos),
+            f"{total_reportes} registros {anio_panel} · {reportes_cerrados} cerrados",
+        )
+    with c6:
         kpi_card(
             "📜",
-            "Certificaciones controladas",
-            numero(total_certificaciones),
-            f"{cobertura_certificaciones:.0f}% con vigencia",
+            "Certificaciones en regla",
+            porcentaje(cobertura_certificaciones),
+            f"{certificaciones_en_regla} de {total_certificaciones} · {por_vencer_certificaciones} por vencer",
         )
-    with cc2:
-        kpi_card(
-            "✅",
-            "Certificaciones vigentes",
-            numero(vigentes_certificaciones),
-            "Vigencia superior a 30 días",
-        )
-    with cc3:
+
+    # =============================================================
+    # DESEMPEÑO PREVENTIVO MENSUAL
+    # =============================================================
+    panel_titulo("Desempeño preventivo mensual")
+    st.caption(
+        f"Metas y resultados acumulados con corte al {fecha_corte}. "
+        "El valor del mes vigente puede variar durante el resto del mes."
+    )
+
+    col1, col2 = st.columns([1.15, 1], gap="large")
+    with col1:
+        if resumen_corte.empty:
+            st.info("Sin datos en la hoja Cumplimientos SSO.")
+        else:
+            fig = go.Figure()
+            fig.add_bar(
+                x=resumen_corte["Mes"],
+                y=resumen_corte["Meta"],
+                name="Meta",
+            )
+            fig.add_bar(
+                x=resumen_corte["Mes"],
+                y=resumen_corte["Realizadas"],
+                name="Realizadas",
+            )
+            fig.update_layout(
+                barmode="group",
+                xaxis_title="Mes",
+                yaxis_title="Cantidad",
+                title="Meta versus resultado mensual",
+            )
+            st.plotly_chart(
+                aplicar_layout_fig(fig, height=390),
+                use_container_width=True,
+            )
+
+    with col2:
+        if resumen_corte.empty:
+            st.info("Sin datos para graficar.")
+        else:
+            fig = go.Figure()
+            fig.add_trace(
+                go.Scatter(
+                    x=resumen_corte["Mes"],
+                    y=resumen_corte["Cumplimiento"],
+                    mode="lines+markers+text",
+                    text=[f"{v:.0f}%" for v in resumen_corte["Cumplimiento"]],
+                    textposition="top center",
+                    name="Cumplimiento",
+                )
+            )
+            fig.add_hline(
+                y=100,
+                line_dash="dash",
+                annotation_text="Meta 100%",
+            )
+            fig.update_yaxes(title="Cumplimiento (%)", rangemode="tozero")
+            fig.update_layout(title="Cumplimiento mensual")
+            st.plotly_chart(
+                aplicar_layout_fig(fig, height=390),
+                use_container_width=True,
+            )
+
+    # =============================================================
+    # RESUMEN EJECUTIVO DE LOS MÓDULOS INCLUIDOS
+    # =============================================================
+    panel_titulo("Resumen ejecutivo por módulo")
+
+    resumen_modulos = pd.DataFrame(
+        [
+            {
+                "Módulo": "PRG SSO 2026",
+                "Indicador principal": porcentaje(avance_prg),
+                "Resultado al corte": f"{cerradas_prg}/{total_prg_exigible} cerradas",
+                "Seguimiento": f"{seguimiento_prg} pendientes o en proceso · {total_prg_anual} anuales",
+            },
+            {
+                "Módulo": "Reportabilidad",
+                "Indicador principal": f"{reportes_abiertos} abiertos",
+                "Resultado al corte": f"{reportes_cerrados}/{total_reportes} cerrados",
+                "Seguimiento": f"{reportes_vencidos} vencidos · {accidentes} accidentes",
+            },
+            {
+                "Módulo": "Cumplimientos SSO",
+                "Indicador principal": porcentaje(porc_corte),
+                "Resultado al corte": f"{numero(real_corte)}/{numero(meta_corte)} actividades",
+                "Seguimiento": f"{observadores} observadores con meta asignada",
+            },
+            {
+                "Módulo": "Capacitaciones",
+                "Indicador principal": porcentaje(avance_cap),
+                "Resultado al corte": f"{cerradas_cap}/{total_cap_exigible} exigibles cerradas",
+                "Seguimiento": f"{seguimiento_cap} requieren gestión · {total_cap_anual} programadas",
+            },
+            {
+                "Módulo": "Reconocimientos",
+                "Indicador principal": f"{total_reconocimientos} registros",
+                "Resultado al corte": f"{reconocimientos_entregados} entregados",
+                "Seguimiento": f"{personas_reconocidas} personas reconocidas durante {anio_panel}",
+            },
+            {
+                "Módulo": "Certificaciones",
+                "Indicador principal": porcentaje(cobertura_certificaciones),
+                "Resultado al corte": f"{vigentes_certificaciones} vigentes · {por_vencer_certificaciones} por vencer",
+                "Seguimiento": f"{vencidas_certificaciones} vencidas · próximo: {proximo_vencimiento_texto}",
+            },
+        ]
+    )
+    tabla_limpia(
+        resumen_modulos,
+        ["Módulo", "Indicador principal", "Resultado al corte", "Seguimiento"],
+        centrar_todo=True,
+    )
+
+    # Las alertas concentran los temas que requieren acción inmediata.
+    panel_titulo("Alertas y seguimiento prioritario")
+    a1, a2, a3, a4 = st.columns(4, gap="medium")
+    with a1:
         kpi_card(
             "⚠️",
-            "Por vencer",
-            numero(por_vencer_certificaciones),
-            "Vencen dentro de 30 días",
+            "PRG por gestionar",
+            numero(seguimiento_prg),
+            f"Actividades exigibles no cerradas al {fecha_corte}",
         )
-    with cc4:
-        valor_proximo = f"{proximo_dias} días" if proximo_dias is not None else "—"
+    with a2:
+        kpi_card(
+            "🟠",
+            "Capacitaciones por gestionar",
+            numero(seguimiento_cap),
+            "Vencidas/exigibles pendientes o en proceso",
+        )
+    with a3:
+        kpi_card(
+            "🚨",
+            "Reportabilidad pendiente",
+            numero(reportes_abiertos),
+            f"Incluye {reportes_vencidos} registros vencidos",
+        )
+    with a4:
         kpi_card(
             "📌",
             "Próximo vencimiento",
-            valor_proximo,
-            proximo_elemento,
+            f"{por_vencer_certificaciones} alertas",
+            proximo_vencimiento_texto,
         )
 
-    st.markdown(
-        f"<div class='subsection-label notranslate' translate='no'>Reconocimientos {int(HOY.year)}</div>",
-        unsafe_allow_html=True,
-    )
-    cr1, cr2, cr3, cr4 = st.columns(4, gap="medium")
-    with cr1:
-        kpi_card(
-            "🏆",
-            f"Reconocimientos {int(HOY.year)}",
-            numero(total_reconocimientos),
-            "Registros del año",
-        )
-    with cr2:
-        kpi_card(
-            "👷",
-            "Personas reconocidas",
-            numero(personas_reconocidas),
-            "Trabajadores destacados",
-        )
-    with cr3:
-        kpi_card(
-            "🏢",
-            "Reconocimientos corporativos",
-            numero(reconocimientos_corporativos),
-            "Reconocimientos a SAIVAM",
-        )
-    with cr4:
-        kpi_card(
-            "✅",
-            "Reconocimientos entregados",
-            numero(reconocimientos_entregados),
-            "Registros cerrados",
-        )
-
-    col_cert, col_rec = st.columns(2, gap="large")
-
-    with col_cert:
-        panel_titulo("Certificaciones por categoría")
-        if certificaciones_df.empty or "Categoria" not in certificaciones_df.columns:
-            st.info("Sin datos de certificaciones para graficar.")
+    # El detalle por persona queda disponible sin recargar visualmente el panel.
+    with st.expander("Ver detalle de cumplimiento por observador", expanded=False):
+        if cumplimiento_df is None or cumplimiento_df.empty:
+            st.info("Sin registros para mostrar.")
         else:
-            categorias_cert = (
-                certificaciones_df["Categoria"]
-                .fillna("Sin categoría")
-                .astype(str)
-                .replace("", "Sin categoría")
-                .value_counts()
-                .rename_axis("Categoría")
-                .reset_index(name="Cantidad")
-            )
-            fig_cert = px.bar(
-                categorias_cert.sort_values("Cantidad"),
-                x="Cantidad",
-                y="Categoría",
-                orientation="h",
-                text="Cantidad",
-            )
-            fig_cert.update_traces(textposition="outside", marker_color="#62C990")
-            st.plotly_chart(
-                aplicar_layout_fig(fig_cert, height=330),
-                use_container_width=True,
-            )
-
-    with col_rec:
-        panel_titulo("Reconocimientos por mes")
-        if reconocimientos_2026.empty or "Fecha" not in reconocimientos_2026.columns:
-            st.info("Sin datos de reconocimientos para graficar.")
-        else:
-            reconocimientos_2026["Mes_Numero_KPI"] = reconocimientos_2026["Fecha"].dt.month
-            resumen_rec_mensual = (
-                reconocimientos_2026
-                .groupby("Mes_Numero_KPI", as_index=False)
-                .size()
-                .rename(columns={"size": "Cantidad"})
-            )
-            resumen_rec_mensual["Mes"] = resumen_rec_mensual["Mes_Numero_KPI"].map(MESES)
-            resumen_rec_mensual = resumen_rec_mensual.sort_values("Mes_Numero_KPI")
-            fig_rec = px.bar(
-                resumen_rec_mensual,
-                x="Mes",
-                y="Cantidad",
-                text="Cantidad",
-            )
-            fig_rec.update_traces(textposition="outside", marker_color="#62C990")
-            st.plotly_chart(
-                aplicar_layout_fig(fig_rec, height=330),
-                use_container_width=True,
-            )
-
-    col_vencimientos, col_ultimos = st.columns(2, gap="large")
-
-    with col_vencimientos:
-        panel_titulo("Próximos vencimientos")
-        if proximos_vencimientos.empty:
-            st.info("Sin vencimientos próximos registrados.")
-        else:
-            tabla_vencimientos = proximos_vencimientos.head(5).copy()
+            filas = []
+            for observador, grupo in cumplimiento_df.groupby("Observador", dropna=False):
+                meta = sum(
+                    pd.to_numeric(grupo[m], errors="coerce").fillna(0).sum()
+                    for m in MESES_CUMPLIMIENTOS
+                )
+                real = sum(
+                    pd.to_numeric(grupo[f"RE_{m}"], errors="coerce").fillna(0).sum()
+                    for m in MESES_CUMPLIMIENTOS
+                )
+                filas.append(
+                    {
+                        "Observador": observador,
+                        "Meta acumulada": meta,
+                        "Realizadas": real,
+                        "Cumplimiento": porcentaje((real / meta * 100) if meta else 0),
+                    }
+                )
             tabla_limpia(
-                tabla_vencimientos,
-                [
-                    "Categoria",
-                    "Subcategoria",
-                    "Vencimiento",
-                    "Días restantes",
-                    "Estado",
-                ],
+                pd.DataFrame(filas),
+                ["Observador", "Meta acumulada", "Realizadas", "Cumplimiento"],
                 centrar_todo=True,
             )
-
-    with col_ultimos:
-        panel_titulo("Últimos reconocimientos")
-        if reconocimientos_2026.empty:
-            st.info(f"Sin reconocimientos registrados durante {int(HOY.year)}.")
-        else:
-            ultimos_reconocimientos = reconocimientos_2026.sort_values(
-                "Fecha",
-                ascending=False,
-            ).head(5)
-            tabla_limpia(
-                ultimos_reconocimientos,
-                ["Fecha", "Trabajador", "Motivo", "Periodo", "Estado"],
-                centrar_todo=True,
-            )
-
 
 def pagina_reportabilidad(datos, filtros):
     """
