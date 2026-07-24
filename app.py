@@ -48,7 +48,7 @@ st.markdown(
 AUTOR = "Ricardo Grez"
 EMPRESA = "SAIVAM"
 CONTRATO = "CMPC Mulchén"
-VERSION = "1.4.19"
+VERSION = "1.4.21"
 REVISION_CODIGO = "23-07-2026-R45-CUMPLIMIENTO-META-DIARIA"
 
 print(
@@ -5744,7 +5744,6 @@ iniciada, pero el proceso de Python no utiliza esa sesión.
         </style>
         <div class="cumplimiento-hero">
             <h2>🎯 Cumplimiento SSO {ANIO_CUMPLIMIENTOS}</h2>
-            <p>Seguimiento ejecutivo de actividades preventivas por colaborador, actividad y mes.</p>
         </div>
         """.replace("{ANIO_CUMPLIMIENTOS}", str(ANIO_CUMPLIMIENTOS)),
         unsafe_allow_html=True,
@@ -5788,23 +5787,9 @@ iniciada, pero el proceso de Python no utiliza esa sesión.
     if seleccion_periodo == PERIODO_ANUAL_CUMPLIMIENTOS:
         meses_periodo = list(MESES_CORTOS)
         aplicar_corte_diario = False
-        detalle_periodo = (
-            "Cálculo anual: total de actividades realizadas entre ENE y DIC "
-            f"dividido por el total programado para todo {ANIO_CUMPLIMIENTOS}."
-        )
     else:
         meses_periodo = list(MESES_CUMPLIMIENTOS)
         aplicar_corte_diario = True
-        detalle_periodo = (
-            f"Cálculo automático al {FECHA_CORTE_CUMPLIMIENTOS}: se consideran "
-            "las metas completas de los meses cerrados y la meta del mes vigente "
-            f"se prorratea por avance calendario ({DIAS_TRANSCURRIDOS_CUMPLIMIENTOS} "
-            f"de {DIAS_MES_CUMPLIMIENTOS} días = "
-            f"{FACTOR_MES_ACTUAL_CUMPLIMIENTOS * 100:.1f}%). "
-            "Los días futuros y los meses posteriores no disminuyen el indicador."
-        )
-
-    st.caption(detalle_periodo)
 
     filtrado = df.copy()
     if seleccion_observador != "Todos":
