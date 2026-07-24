@@ -49,8 +49,8 @@ st.markdown(
 AUTOR = "Ricardo Grez"
 EMPRESA = "SAIVAM"
 CONTRATO = "CMPC Mulchén"
-VERSION = "1.4.23"
-REVISION_CODIGO = "24-07-2026-R48-COMITE-PARITARIO-AVANCE"
+VERSION = "1.4.25"
+REVISION_CODIGO = "24-07-2026-R50-COMITE-AVANCE-SIN-DECIMAL"
 
 print(
     f"[SSO] Ejecutando archivo corregido: {os.path.abspath(__file__)} "
@@ -7354,8 +7354,42 @@ def pagina_comite_paritario(datos, filtros):
     pendientes = int(estados.eq("Pendiente").sum())
     vencidas = int(estados.eq("Vencida").sum())
 
-    avance = (cerradas / total * 100) if total else 0.0
-    avance_texto = f"{avance:.1f}%".replace(".", ",")
+    # Avance exigible a la fecha actual:
+    # - Usa Fecha_Compromiso como fecha límite de cada actividad.
+    # - Cuando no existe Fecha_Compromiso, utiliza la columna Fecha.
+    # - Excluye del denominador las actividades programadas para fechas futuras,
+    #   evitando que los meses pendientes del año reduzcan el porcentaje actual.
+    fecha_corte_actividad = pd.Series(pd.NaT, index=df.index, dtype="datetime64[ns]")
+
+    if "Fecha_Compromiso" in df.columns:
+        fecha_corte_actividad = df["Fecha_Compromiso"].apply(convertir_fecha)
+
+    if "Fecha" in df.columns:
+        fecha_programada = df["Fecha"].apply(convertir_fecha)
+        fecha_corte_actividad = fecha_corte_actividad.fillna(fecha_programada)
+
+    actividades_exigibles = (
+        fecha_corte_actividad.notna()
+        & fecha_corte_actividad.dt.normalize().le(HOY)
+    )
+
+    # Respaldo: si la planilla no contiene fechas válidas, utiliza todos los
+    # registros para que el indicador siga siendo calculable.
+    if not actividades_exigibles.any() and total > 0:
+        actividades_exigibles = pd.Series(True, index=df.index)
+
+    total_a_fecha = int(actividades_exigibles.sum())
+    cerradas_a_fecha = int(
+        estados.loc[actividades_exigibles].eq("Cerrada").sum()
+    )
+
+    avance = (
+        cerradas_a_fecha / total_a_fecha * 100
+        if total_a_fecha
+        else 0.0
+    )
+    avance_texto = f"{avance:.0f}%"
+    fecha_corte_texto = HOY.strftime("%d/%m/%Y")
 
     panel_titulo("Resumen Ejecutivo del Comité Paritario")
 
@@ -7371,16 +7405,19 @@ def pagina_comite_paritario(datos, filtros):
     with c2:
         kpi_card(
             "✅",
-            "Actividades cerradas",
-            numero(cerradas),
-            "Actividades con gestión finalizada",
+            "Cerradas a la fecha",
+            numero(cerradas_a_fecha),
+            f"Actividades cumplidas al {fecha_corte_texto}",
         )
     with c3:
         kpi_card(
             "📈",
-            "Avance del programa",
+            "Avance a la fecha",
             avance_texto,
-            f"{numero(cerradas)} de {numero(total)} actividades cerradas",
+            (
+                f"{numero(cerradas_a_fecha)} de {numero(total_a_fecha)} "
+                f"actividades exigibles al {fecha_corte_texto}"
+            ),
         )
 
     # Segunda fila: desglose de las actividades que requieren seguimiento.
