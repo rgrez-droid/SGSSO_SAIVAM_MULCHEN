@@ -48,8 +48,8 @@ st.markdown(
 AUTOR = "Ricardo Grez"
 EMPRESA = "SAIVAM"
 CONTRATO = "CMPC Mulchén"
-VERSION = "1.4.21"
-REVISION_CODIGO = "23-07-2026-R45-CUMPLIMIENTO-META-DIARIA"
+VERSION = "1.4.22"
+REVISION_CODIGO = "24-07-2026-R46-CUMPLIMIENTO-PENDIENTES-ENTEROS"
 
 print(
     f"[SSO] Ejecutando archivo corregido: {os.path.abspath(__file__)} "
@@ -5812,7 +5812,9 @@ iniciada, pero el proceso de Python no utiliza esa sesión.
         aplicar_corte_diario=aplicar_corte_diario,
     )
     real_total = float(filtrado[reales_periodo].sum().sum())
-    pendientes = max(0.0, meta_total - real_total)
+    # Las metas del mes vigente pueden contener decimales debido al prorrateo
+    # diario. La brecha se presenta como una cantidad entera de actividades.
+    pendientes = int(round(max(0.0, meta_total - real_total)))
     cumplimiento_total = (real_total / meta_total * 100) if meta_total else 0.0
 
     def color_cumplimiento(valor):
@@ -5854,7 +5856,7 @@ iniciada, pero el proceso de Python no utiliza esa sesión.
             "Colaborador": observador,
             "Meta": meta,
             "Realizadas": real,
-            "Pendientes": max(0.0, meta - real),
+            "Pendientes": int(round(max(0.0, meta - real))),
             "Cumplimiento": (real / meta * 100) if meta else 0.0,
         })
     por_persona = pd.DataFrame(filas_persona).sort_values(
@@ -5873,7 +5875,7 @@ iniciada, pero el proceso de Python no utiliza esa sesión.
             "Actividad": actividad,
             "Meta": meta,
             "Realizadas": real,
-            "Pendientes": max(0.0, meta - real),
+            "Pendientes": int(round(max(0.0, meta - real))),
             "Cumplimiento": (real / meta * 100) if meta else 0.0,
         })
     por_actividad = pd.DataFrame(filas_actividad)
@@ -6064,6 +6066,12 @@ iniciada, pero el proceso de Python no utiliza esa sesión.
 
     if vista_control == "📋 Resumen por actividad":
         resumen_tabla = por_actividad.copy()
+        resumen_tabla["Pendientes"] = (
+            pd.to_numeric(resumen_tabla["Pendientes"], errors="coerce")
+            .fillna(0)
+            .round()
+            .astype(int)
+        )
         resumen_tabla["Cumplimiento"] = resumen_tabla["Cumplimiento"].map(
             lambda valor: f"{float(valor):.0f}%"
         )
