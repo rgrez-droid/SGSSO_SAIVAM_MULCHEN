@@ -1,6 +1,7 @@
 import base64
 import glob
 import io
+import math
 import mimetypes
 import os
 import re
@@ -49,7 +50,7 @@ AUTOR = "Ricardo Grez"
 EMPRESA = "SAIVAM"
 CONTRATO = "CMPC Mulchén"
 VERSION = "1.4.22"
-REVISION_CODIGO = "24-07-2026-R46-CUMPLIMIENTO-PENDIENTES-ENTEROS"
+REVISION_CODIGO = "24-07-2026-R47-RESUMEN-ACTIVIDADES-ENTEROS"
 
 print(
     f"[SSO] Ejecutando archivo corregido: {os.path.abspath(__file__)} "
@@ -5713,6 +5714,25 @@ iniciada, pero el proceso de Python no utiliza esa sesión.
     df["Observador"] = df["Observador"].fillna("").astype(str).str.strip()
     df = df[df["Observador"].ne("")].copy()
 
+    # Las metas representan cantidades de actividades. Cuando el corte diario
+    # genera una fracción (por ejemplo, 54,19), se redondea hacia arriba para
+    # obtener una exigencia entera (55). Así, una brecha positiva menor que 1
+    # nunca se muestra erróneamente como 0 pendiente.
+    def meta_entera(valor):
+        try:
+            return int(math.ceil(max(0.0, float(valor)) - 1e-9))
+        except Exception:
+            return 0
+
+    def realizadas_enteras(valor):
+        try:
+            return int(round(max(0.0, float(valor))))
+        except Exception:
+            return 0
+
+    def pendientes_enteros(meta, realizadas):
+        return max(0, meta_entera(meta) - realizadas_enteras(realizadas))
+
     st.markdown(
         """
         <style>
@@ -5812,10 +5832,10 @@ iniciada, pero el proceso de Python no utiliza esa sesión.
         aplicar_corte_diario=aplicar_corte_diario,
     )
     real_total = float(filtrado[reales_periodo].sum().sum())
-    # Las metas del mes vigente pueden contener decimales debido al prorrateo
-    # diario. La brecha se presenta como una cantidad entera de actividades.
-    pendientes = int(round(max(0.0, meta_total - real_total)))
-    cumplimiento_total = (real_total / meta_total * 100) if meta_total else 0.0
+    meta_total_mostrada = meta_entera(meta_total)
+    real_total_mostrado = realizadas_enteras(real_total)
+    pendientes = pendientes_enteros(meta_total, real_total)
+    cumplimiento_total = (real_total_mostrado / meta_total_mostrada * 100) if meta_total_mostrada else 0.0
 
     def color_cumplimiento(valor):
         if valor >= 100:
@@ -5835,9 +5855,9 @@ iniciada, pero el proceso de Python no utiliza esa sesión.
     with k1:
         kpi_card("📈", "Cumplimiento", f"{cumplimiento_total:.0f}%", seleccion_periodo)
     with k2:
-        kpi_card("✅", "Realizadas", numero(real_total), "Actividades ejecutadas")
+        kpi_card("✅", "Realizadas", numero(real_total_mostrado), "Actividades ejecutadas")
     with k3:
-        kpi_card("🎯", "Meta exigible", numero(meta_total), "Meta acumulada a la fecha")
+        kpi_card("🎯", "Meta exigible", numero(meta_total_mostrada), "Meta acumulada a la fecha")
     with k4:
         kpi_card("⏳", "Pendientes", numero(pendientes), "Brecha respecto de la meta")
 
@@ -5854,10 +5874,10 @@ iniciada, pero el proceso de Python no utiliza esa sesión.
         real = float(grupo[reales_periodo].sum().sum())
         filas_persona.append({
             "Colaborador": observador,
-            "Meta": meta,
-            "Realizadas": real,
-            "Pendientes": int(round(max(0.0, meta - real))),
-            "Cumplimiento": (real / meta * 100) if meta else 0.0,
+            "Meta": meta_entera(meta),
+            "Realizadas": realizadas_enteras(real),
+            "Pendientes": pendientes_enteros(meta, real),
+            "Cumplimiento": (realizadas_enteras(real) / meta_entera(meta) * 100) if meta_entera(meta) else 0.0,
         })
     por_persona = pd.DataFrame(filas_persona).sort_values(
         ["Cumplimiento", "Realizadas"], ascending=[False, False]
@@ -5873,12 +5893,26 @@ iniciada, pero el proceso de Python no utiliza esa sesión.
         real = float(grupo[reales_periodo].sum().sum())
         filas_actividad.append({
             "Actividad": actividad,
-            "Meta": meta,
-            "Realizadas": real,
-            "Pendientes": int(round(max(0.0, meta - real))),
-            "Cumplimiento": (real / meta * 100) if meta else 0.0,
+            "Meta": meta_entera(meta),
+            "Realizadas": realizadas_enteras(real),
+            "Pendientes": pendientes_enteros(meta, real),
+            "Cumplimiento": (realizadas_enteras(real) / meta_entera(meta) * 100) if meta_entera(meta) else 0.0,
         })
     por_actividad = pd.DataFrame(filas_actividad)
+
+    # El resumen por actividad debe mostrar cantidades enteras. La meta
+    # proporcional del mes vigente se redondea hacia arriba; las realizadas
+    # se muestran como cantidades enteras y los pendientes se calculan como
+    # la diferencia entre ambos valores enteros.
+    for columna_entera in ["Meta", "Realizadas", "Pendientes"]:
+        por_actividad[columna_entera] = pd.array(
+            pd.to_numeric(por_actividad[columna_entera], errors="coerce")
+            .fillna(0)
+            .round()
+            .astype(int),
+            dtype="Int64",
+        )
+
     por_actividad["_orden"] = por_actividad["Actividad"].apply(
         lambda x: orden_actividades.index(x) if x in orden_actividades else 99
     )
@@ -5958,10 +5992,10 @@ iniciada, pero el proceso de Python no utiliza esa sesión.
         real = float(filtrado[f"RE_{mes}"].sum())
         resumen_mes.append({
             "Mes": mes,
-            "Meta mensual": meta_mensual,
-            "Meta exigible": meta_exigible,
-            "Realizadas": real,
-            "Cumplimiento": (real / meta_exigible * 100) if meta_exigible else 0.0,
+            "Meta mensual": meta_entera(meta_mensual),
+            "Meta exigible": meta_entera(meta_exigible),
+            "Realizadas": realizadas_enteras(real),
+            "Cumplimiento": (realizadas_enteras(real) / meta_entera(meta_exigible) * 100) if meta_entera(meta_exigible) else 0.0,
         })
     resumen_mes = pd.DataFrame(resumen_mes)
     resumen_visible = resumen_mes[resumen_mes["Mes"].isin(meses_periodo)].copy()
@@ -5975,7 +6009,7 @@ iniciada, pero el proceso de Python no utiliza esa sesión.
             name="Meta exigible", opacity=.45,
             customdata=resumen_visible[["Meta mensual"]],
             hovertemplate=(
-                "%{x}<br>Meta exigible: %{y:.1f}"
+                "%{x}<br>Meta exigible: %{y:.0f}"
                 "<br>Meta mensual completa: %{customdata[0]:.0f}<extra></extra>"
             ),
         ))
@@ -6066,12 +6100,15 @@ iniciada, pero el proceso de Python no utiliza esa sesión.
 
     if vista_control == "📋 Resumen por actividad":
         resumen_tabla = por_actividad.copy()
-        resumen_tabla["Pendientes"] = (
-            pd.to_numeric(resumen_tabla["Pendientes"], errors="coerce")
-            .fillna(0)
-            .round()
-            .astype(int)
-        )
+
+        # Se convierten a texto entero antes de construir la tabla HTML. Esto
+        # impide que pandas o el renderizador vuelvan a mostrar decimales como
+        # 54.193548 o que una brecha fraccionaria aparezca como 0.
+        for columna_entera in ["Meta", "Realizadas", "Pendientes"]:
+            resumen_tabla[columna_entera] = resumen_tabla[columna_entera].apply(
+                lambda valor: str(int(valor)) if pd.notna(valor) else "0"
+            )
+
         resumen_tabla["Cumplimiento"] = resumen_tabla["Cumplimiento"].map(
             lambda valor: f"{float(valor):.0f}%"
         )
@@ -6093,10 +6130,15 @@ iniciada, pero el proceso de Python no utiliza esa sesión.
                 filtrado[f"RE_{mes}"], errors="coerce"
             ).fillna(0)
 
-            detalle[mes] = [
-                f"{real:.0f}/{meta:.1f} ({(real / meta * 100 if meta else 0):.0f}%)"
-                for meta, real in zip(metas_exigibles_mes, realizadas_mes)
-            ]
+            detalle_mes = []
+            for meta, real in zip(metas_exigibles_mes, realizadas_mes):
+                meta_int = meta_entera(meta)
+                real_int = realizadas_enteras(real)
+                cumplimiento_int = (real_int / meta_int * 100) if meta_int else 0
+                detalle_mes.append(
+                    f"{real_int}/{meta_int} ({cumplimiento_int:.0f}%)"
+                )
+            detalle[mes] = detalle_mes
 
         tabla_limpia(
             detalle,
@@ -6113,11 +6155,15 @@ iniciada, pero el proceso de Python no utiliza esa sesión.
 
             for mes in meses_periodo:
                 meta_mensual = _a_numero_cumplimiento(fila.get(mes, 0))
-                meta = meta_mensual * factor_meta_cumplimiento(
-                    mes,
-                    aplicar_corte_diario,
+                meta = meta_entera(
+                    meta_mensual * factor_meta_cumplimiento(
+                        mes,
+                        aplicar_corte_diario,
+                    )
                 )
-                real = _a_numero_cumplimiento(fila.get(f"RE_{mes}", 0))
+                real = realizadas_enteras(
+                    _a_numero_cumplimiento(fila.get(f"RE_{mes}", 0))
+                )
                 cumplimiento_mes = (real / meta * 100) if meta > 0 else 0.0
                 valores.append(cumplimiento_mes)
 
