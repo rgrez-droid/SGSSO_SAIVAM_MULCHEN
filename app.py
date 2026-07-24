@@ -6051,9 +6051,28 @@ iniciada, pero el proceso de Python no utiliza esa sesión.
             texttemplate="%{percent:.0%}",
             hovertemplate="%{label}<br>Realizadas: %{value:.0f}<br>%{percent:.0%}<extra></extra>",
         ))
-        fig.update_layout(showlegend=True, legend=dict(orientation="h", y=-.15))
+        # Se reserva una zona exclusiva bajo el gráfico para la leyenda,
+        # evitando que el detalle de actividades quede encima de la dona.
+        fig = aplicar_layout_fig(fig, height=540)
+        fig.update_traces(
+            domain=dict(x=[0.06, 0.94], y=[0.43, 1.00])
+        )
+        fig.update_layout(
+            showlegend=True,
+            margin=dict(l=12, r=12, t=18, b=18),
+            legend=dict(
+                orientation="v",
+                yanchor="top",
+                y=0.36,
+                xanchor="center",
+                x=0.50,
+                bgcolor="rgba(1,8,6,.18)",
+                font=dict(color="#D1FAE5", size=12),
+                tracegroupgap=3,
+            ),
+        )
         st.plotly_chart(
-            aplicar_layout_fig(fig, height=410),
+            fig,
             use_container_width=True,
             config={"displaylogo": False},
         )
