@@ -48,7 +48,7 @@ st.markdown(
 AUTOR = "Ricardo Grez"
 EMPRESA = "SAIVAM"
 CONTRATO = "CMPC Mulchén"
-VERSION = "1.4.14"
+VERSION = "1.4.15"
 REVISION_CODIGO = "23-07-2026-R42-FECHA-AUTOMATICA"
 
 print(
@@ -6687,16 +6687,33 @@ def pagina_capacitaciones(datos, filtros):
     # la pestaña "Capacitaciones" de Google Sheets.
     df = aplicar_filtros(datos["Capacitaciones"], *filtros)
 
+    # Fecha de corte dinámica de Chile continental. Streamlit vuelve a ejecutar
+    # el script en cada actualización, por lo que este valor avanza día a día.
+    hoy_capacitaciones = fecha_actual_chile()
+
     if df is not None and not df.empty:
         df = df.sort_values("Fecha", ascending=True, na_position="last").copy()
         estados = df["Estado"].apply(estado_base)
         cerradas = int((estados == "Cerrada").sum())
         pendientes = int((estados == "Pendiente").sum())
         en_proceso = int((estados == "En proceso").sum())
+        pendientes_en_proceso = pendientes + en_proceso
+
+        # El avance a la fecha considera solamente las capacitaciones cuya fecha
+        # programada ya llegó. Las actividades futuras no reducen el indicador.
+        fechas_capacitacion = pd.to_datetime(df["Fecha"], errors="coerce", dayfirst=True)
+        programadas_a_fecha = fechas_capacitacion.notna() & (fechas_capacitacion.dt.normalize() <= hoy_capacitaciones)
+        total_a_fecha = int(programadas_a_fecha.sum())
+        cerradas_a_fecha = int(((estados == "Cerrada") & programadas_a_fecha).sum())
+        avance_a_fecha = (cerradas_a_fecha / total_a_fecha * 100) if total_a_fecha else 0.0
     else:
         cerradas = 0
-        pendientes = 0
-        en_proceso = 0
+        pendientes_en_proceso = 0
+        total_a_fecha = 0
+        cerradas_a_fecha = 0
+        avance_a_fecha = 0.0
+
+    fecha_corte_texto = fecha_texto(hoy_capacitaciones)
 
     c1, c2, c3, c4 = st.columns(4)
     with c1:
@@ -6704,9 +6721,19 @@ def pagina_capacitaciones(datos, filtros):
     with c2:
         kpi_card("✅", "Cerradas", numero(cerradas), "Estado informado en Sheet")
     with c3:
-        kpi_card("🟠", "Pendientes", numero(pendientes), "Estado informado en Sheet")
+        kpi_card(
+            "🟠",
+            "Pendientes / En proceso",
+            numero(pendientes_en_proceso),
+            "Seguimiento requerido",
+        )
     with c4:
-        kpi_card("🔵", "En proceso", numero(en_proceso), "Estado informado en Sheet")
+        kpi_card(
+            "📈",
+            "% de avance",
+            porcentaje(avance_a_fecha),
+            f"Al {fecha_corte_texto} · {cerradas_a_fecha} de {total_a_fecha} programadas",
+        )
 
     col_a, col_b = st.columns(2)
     with col_a:
