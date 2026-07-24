@@ -48,8 +48,8 @@ st.markdown(
 AUTOR = "Ricardo Grez"
 EMPRESA = "SAIVAM"
 CONTRATO = "CMPC Mulchén"
-VERSION = "1.4.17"
-REVISION_CODIGO = "23-07-2026-R43-KPI-EJECUTIVO"
+VERSION = "1.4.18"
+REVISION_CODIGO = "23-07-2026-R44-AJUSTES-TITULOS-KPI-PRG"
 
 print(
     f"[SSO] Ejecutando archivo corregido: {os.path.abspath(__file__)} "
@@ -5114,9 +5114,7 @@ def pagina_panel_general(datos, filtros):
             font-size: 13px;
             line-height: 1.45;
         ">
-            <strong style="color:#D1FAE5; font-size:15px;">Resumen ejecutivo SSO</strong><br>
-            Consolidado de gestión preventiva con corte automático al <strong>{fecha_corte}</strong>.
-            El mes vigente se presenta de forma parcial y se actualiza diariamente.
+            <strong style="color:#D1FAE5; font-size:15px;">Resumen ejecutivo SSO</strong>
         </div>
         """,
         unsafe_allow_html=True,
@@ -6788,7 +6786,7 @@ def pagina_capacitaciones(datos, filtros):
     with c1:
         kpi_card("🎓", "Capacitaciones", numero(len(df)), "Total programado")
     with c2:
-        kpi_card("✅", "Cerradas", numero(cerradas), "Estado informado en Sheet")
+        kpi_card("✅", "Cerradas", numero(cerradas), "Estado informado")
     with c3:
         kpi_card(
             "🟠",
@@ -6996,14 +6994,14 @@ def pagina_programa_anual(datos, filtros):
             "🟠",
             "Actividades pendientes",
             numero(pendientes),
-            "Estado informado en Sheet",
+            "Estado informado",
         )
     with c4:
         kpi_card(
             "🔵",
             "Actividades en proceso",
             numero(en_proceso),
-            "Estado informado en Sheet",
+            "Estado informado",
         )
     with c5:
         kpi_card(
