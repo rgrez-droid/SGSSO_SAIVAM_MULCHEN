@@ -49,7 +49,7 @@ AUTOR = "Ricardo Grez"
 EMPRESA = "SAIVAM"
 CONTRATO = "CMPC Mulchén"
 VERSION = "1.4.14"
-REVISION_CODIGO = "21-07-2026-R41-REPORTABILIDAD-EVIDENCIA"
+REVISION_CODIGO = "23-07-2026-R42-FECHA-AUTOMATICA"
 
 print(
     f"[SSO] Ejecutando archivo corregido: {os.path.abspath(__file__)} "
@@ -105,7 +105,16 @@ MESES = {
     12: "Diciembre",
 }
 
-HOY = pd.Timestamp.today().normalize()
+def fecha_actual_chile():
+    """Retorna la fecha calendario vigente en Chile continental."""
+    try:
+        return pd.Timestamp.now(tz="America/Santiago").tz_localize(None).normalize()
+    except Exception:
+        return pd.Timestamp.today().normalize()
+
+
+# Se recalcula cada vez que Streamlit ejecuta el script.
+HOY = fecha_actual_chile()
 
 
 # =========================================================
@@ -940,15 +949,16 @@ MESES_CORTOS = [
 ]
 
 # =========================================================
-# PERIODO OFICIAL PARA EL MÓDULO CUMPLIMIENTOS SSO
+# PERIODO AUTOMÁTICO PARA EL MÓDULO CUMPLIMIENTOS SSO
 # =========================================================
-# El usuario puede consultar el acumulado oficial de enero a julio de 2026
-# o revisar el año completo, incluyendo las metas y resultados de ENE a DIC.
-ANIO_CUMPLIMIENTOS = 2026
-MES_CORTE_CUMPLIMIENTOS = 7
+# El corte se ajusta automáticamente al año y mes vigentes en Chile.
+ANIO_CUMPLIMIENTOS = int(HOY.year)
+MES_CORTE_CUMPLIMIENTOS = int(HOY.month)
 MESES_CUMPLIMIENTOS = MESES_CORTOS[:MES_CORTE_CUMPLIMIENTOS]
-PERIODO_CUMPLIMIENTOS = "Enero a julio de 2026"
-PERIODO_ANUAL_CUMPLIMIENTOS = "Año completo 2026"
+NOMBRE_MES_CORTE = MESES.get(MES_CORTE_CUMPLIMIENTOS, "")
+PERIODO_CUMPLIMIENTOS = f"Enero a {NOMBRE_MES_CORTE.lower()} de {ANIO_CUMPLIMIENTOS}"
+PERIODO_ANUAL_CUMPLIMIENTOS = f"Año completo {ANIO_CUMPLIMIENTOS}"
+FECHA_CORTE_CUMPLIMIENTOS = HOY.strftime("%d/%m/%Y")
 
 
 def _es_texto_valido(valor):
@@ -4888,8 +4898,7 @@ def pagina_panel_general(datos, filtros):
         else pd.DataFrame()
     )
 
-    # Todos los KPI de cumplimiento del panel general usan el mismo corte
-    # oficial que la página Cumplimientos SSO: enero a julio de 2026.
+    # Todos los KPI usan el corte automático hasta el mes vigente.
     meta_corte = float(resumen_corte["Meta"].sum()) if not resumen_corte.empty else 0
     real_corte = float(resumen_corte["Realizadas"].sum()) if not resumen_corte.empty else 0
     porc_corte = (real_corte / meta_corte * 100) if meta_corte else 0
@@ -4906,7 +4915,7 @@ def pagina_panel_general(datos, filtros):
     with c2:
         kpi_card("👷", "Observadores", numero(observadores), "Personas con meta asignada")
     with c3:
-        kpi_card("✅", "Actividades realizadas", numero(real_corte), f"Meta ene-jul: {numero(meta_corte)}")
+        kpi_card("✅", "Actividades realizadas", numero(real_corte), f"Meta a {NOMBRE_MES_CORTE.lower()}: {numero(meta_corte)}")
     with c4:
         kpi_card("📈", "% cumplimiento", f"{porc_corte:.0f}%", PERIODO_CUMPLIMIENTOS)
     with c5:
@@ -5052,11 +5061,11 @@ def pagina_panel_general(datos, filtros):
                 or "Certificación"
             ).strip()
 
-    # Reconocimientos del año 2026, alineados con el periodo del panel KPI.
+    # Reconocimientos del año vigente, alineados con la fecha actual.
     if not reconocimientos_df.empty and "Fecha" in reconocimientos_df.columns:
         reconocimientos_df["Fecha"] = reconocimientos_df["Fecha"].apply(convertir_fecha)
         reconocimientos_2026 = reconocimientos_df[
-            reconocimientos_df["Fecha"].dt.year.eq(2026)
+            reconocimientos_df["Fecha"].dt.year.eq(int(HOY.year))
         ].copy()
     else:
         reconocimientos_2026 = reconocimientos_df.copy()
@@ -5153,14 +5162,14 @@ def pagina_panel_general(datos, filtros):
         )
 
     st.markdown(
-        "<div class='subsection-label notranslate' translate='no'>Reconocimientos 2026</div>",
+        f"<div class='subsection-label notranslate' translate='no'>Reconocimientos {int(HOY.year)}</div>",
         unsafe_allow_html=True,
     )
     cr1, cr2, cr3, cr4 = st.columns(4, gap="medium")
     with cr1:
         kpi_card(
             "🏆",
-            "Reconocimientos 2026",
+            f"Reconocimientos {int(HOY.year)}",
             numero(total_reconocimientos),
             "Registros del año",
         )
@@ -5264,7 +5273,7 @@ def pagina_panel_general(datos, filtros):
     with col_ultimos:
         panel_titulo("Últimos reconocimientos")
         if reconocimientos_2026.empty:
-            st.info("Sin reconocimientos registrados durante 2026.")
+            st.info(f"Sin reconocimientos registrados durante {int(HOY.year)}.")
         else:
             ultimos_reconocimientos = reconocimientos_2026.sort_values(
                 "Fecha",
@@ -5624,10 +5633,10 @@ iniciada, pero el proceso de Python no utiliza esa sesión.
         }
         </style>
         <div class="cumplimiento-hero">
-            <h2>🎯 Cumplimiento SSO 2026</h2>
+            <h2>🎯 Cumplimiento SSO {ANIO_CUMPLIMIENTOS}</h2>
             <p>Seguimiento ejecutivo de actividades preventivas por colaborador, actividad y mes.</p>
         </div>
-        """,
+        """.replace("{ANIO_CUMPLIMIENTOS}", str(ANIO_CUMPLIMIENTOS)),
         unsafe_allow_html=True,
     )
 
@@ -5670,14 +5679,15 @@ iniciada, pero el proceso de Python no utiliza esa sesión.
         meses_periodo = list(MESES_CORTOS)
         detalle_periodo = (
             "Cálculo anual: total de actividades realizadas entre ENE y DIC "
-            "dividido por el total programado para todo 2026."
+            f"dividido por el total programado para todo {ANIO_CUMPLIMIENTOS}."
         )
     else:
         meses_periodo = list(MESES_CUMPLIMIENTOS)
         detalle_periodo = (
-            "Cálculo oficial: total de actividades realizadas entre ENE y JUL "
-            "dividido por el total programado del mismo periodo. "
-            "Los registros de AGO a DIC no afectan estos indicadores."
+            f"Cálculo automático al {FECHA_CORTE_CUMPLIMIENTOS}: actividades "
+            f"realizadas entre ENE y {MESES_CORTOS[MES_CORTE_CUMPLIMIENTOS - 1]} "
+            "divididas por la meta programada del mismo periodo. "
+            "Los meses posteriores no afectan el indicador a la fecha."
         )
 
     st.caption(detalle_periodo)
@@ -5694,7 +5704,7 @@ iniciada, pero el proceso de Python no utiliza esa sesión.
         st.info("No existen registros para los filtros seleccionados.")
         return
 
-    # Periodo dinámico según la selección: enero-julio o año completo.
+    # Periodo dinámico según la fecha actual o el año completo.
     reales_periodo = [f"RE_{mes}" for mes in meses_periodo]
 
     meta_total = float(filtrado[meses_periodo].sum().sum())
