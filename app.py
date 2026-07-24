@@ -4882,7 +4882,7 @@ def grafico_barra(df, columna, titulo, orientacion="v", top=12):
     st.plotly_chart(aplicar_layout_fig(fig), use_container_width=True)
 
 
-def grafico_donut(df, columna, titulo):
+def grafico_donut(df, columna, titulo, decimales_porcentaje=None):
     if df is None or df.empty or columna not in df.columns:
         st.info("Sin datos para graficar.")
         return
@@ -4890,8 +4890,30 @@ def grafico_donut(df, columna, titulo):
     base[columna] = base[columna].fillna("Sin dato").astype(str).replace("", "Sin dato")
     conteo = base[columna].value_counts().reset_index()
     conteo.columns = [columna, "Cantidad"]
-    fig = px.pie(conteo, names=columna, values="Cantidad", title=titulo, hole=0.48, color_discrete_sequence=PALETA_VERDE)
-    fig.update_traces(textinfo="percent+label")
+    fig = px.pie(
+        conteo,
+        names=columna,
+        values="Cantidad",
+        title=titulo,
+        hole=0.48,
+        color_discrete_sequence=PALETA_VERDE,
+    )
+
+    if decimales_porcentaje is None:
+        fig.update_traces(textinfo="percent+label")
+    else:
+        decimales = max(0, int(decimales_porcentaje))
+        formato = f".{decimales}%"
+        fig.update_traces(
+            textinfo="none",
+            texttemplate=f"%{{label}}<br>%{{percent:{formato}}}",
+            hovertemplate=(
+                f"{columna}: %{{label}}<br>"
+                "Cantidad: %{value:.0f}<br>"
+                f"Porcentaje: %{{percent:{formato}}}<extra></extra>"
+            ),
+        )
+
     st.plotly_chart(aplicar_layout_fig(fig), use_container_width=True)
 
 
@@ -7162,7 +7184,12 @@ def pagina_programa_anual(datos, filtros):
     col_a, col_b = st.columns(2)
     with col_a:
         card_inicio()
-        grafico_donut(df, "Estado", "Estado del programa anual")
+        grafico_donut(
+            df,
+            "Estado",
+            "Estado del programa anual",
+            decimales_porcentaje=1,
+        )
         card_fin()
     with col_b:
         card_inicio()
