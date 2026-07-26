@@ -49,8 +49,8 @@ st.markdown(
 AUTOR = "Ricardo Grez"
 EMPRESA = "SAIVAM"
 CONTRATO = "CMPC Mulchén"
-VERSION = "1.4.25"
-REVISION_CODIGO = "24-07-2026-R50-COMITE-AVANCE-SIN-DECIMAL"
+VERSION = "1.4.26"
+REVISION_CODIGO = "26-07-2026-R51-COMITE-TRES-ESTADOS"
 
 print(
     f"[SSO] Ejecutando archivo corregido: {os.path.abspath(__file__)} "
@@ -1968,11 +1968,14 @@ def cargar_datos():
         if "Estado" in df.columns:
             df = normalizar_estados(df)
 
+        # Los módulos operacionales pueden recalcular vencimientos según la
+        # fecha de compromiso. Comité Paritario se excluye deliberadamente:
+        # en ese módulo la columna Estado de Google Sheets es la fuente única
+        # de verdad y solo utiliza Cerrada, Pendiente y En proceso.
         if nombre_hoja in [
             "OPS",
             "Inspecciones",
             "Plan_Accion",
-            "Comite_Paritario",
             "Protocolos_MINSAL",
         ]:
             df = marcar_vencimientos(
@@ -7342,17 +7345,26 @@ def pagina_comite_paritario(datos, filtros):
 
     total = int(len(df))
 
-    # Separa cada estado para evitar que "pendientes" mezcle actividades
-    # en proceso o vencidas. La base ya viene normalizada desde Google Sheets.
+    # El Comité Paritario utiliza exclusivamente los tres estados definidos
+    # en Google Sheets: Cerrada, Pendiente y En proceso. Como compatibilidad
+    # con datos antiguos o una caché previa, cualquier registro que todavía
+    # llegue como "Vencida" se incorpora automáticamente a "Pendiente".
     if not df.empty and "Estado" in df.columns:
-        estados = df["Estado"].fillna("").apply(estado_base)
+        estados = (
+            df["Estado"]
+            .fillna("")
+            .apply(estado_base)
+            .replace({"Vencida": "Pendiente"})
+        )
+        # Actualiza también el DataFrame utilizado por gráficos y detalle para
+        # que en toda la página se visualicen únicamente los tres estados.
+        df["Estado"] = estados
     else:
         estados = pd.Series(dtype="object")
 
     cerradas = int(estados.eq("Cerrada").sum())
     en_proceso = int(estados.eq("En proceso").sum())
     pendientes = int(estados.eq("Pendiente").sum())
-    vencidas = int(estados.eq("Vencida").sum())
 
     # Avance exigible a la fecha actual:
     # - Usa Fecha_Compromiso como fecha límite de cada actividad.
@@ -7420,8 +7432,10 @@ def pagina_comite_paritario(datos, filtros):
             ),
         )
 
-    # Segunda fila: desglose de las actividades que requieren seguimiento.
-    c4, c5, c6 = st.columns(3)
+    # Segunda fila: solo se muestran los dos estados abiertos del Sheet.
+    # Las actividades que anteriormente aparecían como vencidas ahora forman
+    # parte de la tarjeta Actividades pendientes.
+    c4, c5 = st.columns(2)
     with c4:
         kpi_card(
             "🟠",
@@ -7434,14 +7448,7 @@ def pagina_comite_paritario(datos, filtros):
             "⚠️",
             "Actividades pendientes",
             numero(pendientes),
-            "Actividades aún no iniciadas",
-        )
-    with c6:
-        kpi_card(
-            "🚨",
-            "Actividades vencidas",
-            numero(vencidas),
-            "Prioridad de regularización y cierre",
+            "Actividades registradas como pendientes en la planilla",
         )
 
     panel_titulo("Distribución de Actividades del CPHS")
