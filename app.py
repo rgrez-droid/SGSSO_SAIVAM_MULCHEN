@@ -50,7 +50,7 @@ AUTOR = "Ricardo Grez"
 EMPRESA = "SAIVAM"
 CONTRATO = "CMPC Mulchén"
 VERSION = "1.4.26"
-REVISION_CODIGO = "26-07-2026-R53-CAPACITACIONES-PENDIENTES-PROCESO-SEPARADOS"
+REVISION_CODIGO = "27-07-2026-R54-PROTOCOLOS-MINSAL-PDT"
 
 print(
     f"[SSO] Ejecutando archivo corregido: {os.path.abspath(__file__)} "
@@ -3519,6 +3519,17 @@ section[data-testid="stSidebar"] div[role="radiogroup"] p {
     overflow: visible !important;
     text-overflow: clip !important;
     text-shadow: 0 1px 1px rgba(0,0,0,.42);
+}
+
+/* Indicador discreto de módulo pendiente en Protocolos MINSAL. */
+section[data-testid="stSidebar"] div[role="radiogroup"] label:nth-of-type(8) p::after {
+    content: " (Pdt)";
+    font-size: 8.2px !important;
+    font-weight: 800 !important;
+    color: #B7F7D4 !important;
+    opacity: .88;
+    vertical-align: 1px;
+    letter-spacing: .1px;
 }
 
 section[data-testid="stSidebar"] label,
