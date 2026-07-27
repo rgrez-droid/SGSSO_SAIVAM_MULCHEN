@@ -50,7 +50,7 @@ AUTOR = "Ricardo Grez"
 EMPRESA = "SAIVAM"
 CONTRATO = "CMPC Mulchén"
 VERSION = "1.4.26"
-REVISION_CODIGO = "26-07-2026-R51-COMITE-TRES-ESTADOS"
+REVISION_CODIGO = "26-07-2026-R53-CAPACITACIONES-PENDIENTES-PROCESO-SEPARADOS"
 
 print(
     f"[SSO] Ejecutando archivo corregido: {os.path.abspath(__file__)} "
@@ -3700,6 +3700,46 @@ section[data-testid="stSidebar"] [data-baseweb="select"] * {
     line-height: 1.32;
 }
 
+/* Tarjeta KPI dividida en dos indicadores del mismo ancho. */
+.kpi-split-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin-top: 2px;
+    width: 100%;
+}
+
+.kpi-split-item {
+    min-width: 0;
+    padding: 0 12px 0 0;
+}
+
+.kpi-split-item + .kpi-split-item {
+    border-left: 1px solid rgba(167,243,208,.26);
+    padding: 0 0 0 16px;
+}
+
+.kpi-split-label {
+    min-height: 32px;
+    display: flex;
+    align-items: flex-end;
+    font-size: 12.8px;
+    color: #B7E4D0;
+    font-weight: 930;
+    line-height: 1.16;
+}
+
+.kpi-split-value {
+    margin-top: 8px;
+    font-size: 25px;
+    font-weight: 1000;
+    color: #FFFFFF;
+    line-height: 1.1;
+}
+
+.kpi-card-split .kpi-sub {
+    margin-top: 11px;
+}
+
 .panel-title {
     color: #D1FAE5;
     font-weight: 1000;
@@ -4811,6 +4851,63 @@ def kpi_card(icono, titulo, valor, subtitulo=""):
     )
 
 
+def kpi_card_dividida(
+    icono,
+    titulo_izquierda,
+    valor_izquierda,
+    titulo_derecha,
+    valor_derecha,
+    subtitulo="",
+):
+    """Muestra dos indicadores independientes dentro de una sola tarjeta KPI."""
+    tonos = {
+        "🛡️": "azul",
+        "👷": "verde",
+        "✅": "morado",
+        "⚠️": "ambar",
+        "🚨": "rojo",
+        "📋": "azul",
+        "📈": "verde",
+        "🎓": "morado",
+        "🦺": "ambar",
+        "🔒": "celeste",
+        "📁": "azul",
+        "📦": "verde",
+        "👥": "celeste",
+        "🟢": "verde",
+        "🟠": "ambar",
+        "🔴": "rojo",
+        "🔎": "azul",
+        "📝": "morado",
+        "📌": "ambar",
+        "📜": "celeste",
+        "🏆": "ambar",
+        "🏢": "verde",
+        "🗂️": "celeste",
+        "❌": "rojo",
+    }
+    tono = tonos.get(icono, "azul")
+    st.markdown(
+        f"""
+<div class="kpi-card kpi-card-split notranslate" translate="no">
+    <div class="kpi-icon {tono}" translate="no">{icono}</div>
+    <div class="kpi-split-grid">
+        <div class="kpi-split-item">
+            <div class="kpi-split-label notranslate" translate="no">{escape_html(titulo_izquierda)}</div>
+            <div class="kpi-split-value notranslate" translate="no">{escape_html(valor_izquierda)}</div>
+        </div>
+        <div class="kpi-split-item">
+            <div class="kpi-split-label notranslate" translate="no">{escape_html(titulo_derecha)}</div>
+            <div class="kpi-split-value notranslate" translate="no">{escape_html(valor_derecha)}</div>
+        </div>
+    </div>
+    <div class="kpi-sub notranslate" translate="no">{escape_html(subtitulo)}</div>
+</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def badge_estado(estado):
     estado_norm = normalizar_texto(estado)
     clase = "badge-neutro"
@@ -5415,7 +5512,7 @@ def pagina_panel_general(datos, filtros):
                 filas.append(
                     {
                         "Observador": observador,
-                        "Meta acumulada": meta,
+                        "Meta acumulada": int(round(meta)),
                         "Realizadas": real,
                         "Cumplimiento": porcentaje((real / meta * 100) if meta else 0),
                     }
@@ -6139,7 +6236,6 @@ iniciada, pero el proceso de Python no utiliza esa sesión.
         [
             "📋 Resumen por actividad",
             "🗓️ Matriz mensual",
-            "🔥 Mapa de calor",
         ],
         horizontal=True,
         label_visibility="collapsed",
@@ -6166,7 +6262,7 @@ iniciada, pero el proceso de Python no utiliza esa sesión.
             centrar_todo=False,
         )
 
-    elif vista_control == "🗓️ Matriz mensual":
+    else:
         detalle = filtrado[["Observador", "Actividad estándar"]].copy()
         detalle = detalle.rename(columns={"Actividad estándar": "Actividad"})
 
@@ -6194,72 +6290,6 @@ iniciada, pero el proceso de Python no utiliza esa sesión.
             centrar_todo=True,
         )
 
-    else:
-        heat_rows = []
-        heat_labels = []
-
-        for _, fila in filtrado.iterrows():
-            valores = []
-
-            for mes in meses_periodo:
-                meta_mensual = _a_numero_cumplimiento(fila.get(mes, 0))
-                meta = meta_entera(
-                    meta_mensual * factor_meta_cumplimiento(
-                        mes,
-                        aplicar_corte_diario,
-                    )
-                )
-                real = realizadas_enteras(
-                    _a_numero_cumplimiento(fila.get(f"RE_{mes}", 0))
-                )
-                cumplimiento_mes = (real / meta * 100) if meta > 0 else 0.0
-                valores.append(cumplimiento_mes)
-
-            heat_rows.append(valores)
-            heat_labels.append(
-                f"{fila['Observador']} · {fila['Actividad estándar']}"
-            )
-
-        if heat_rows:
-            maximo_heatmap = max(max(fila) for fila in heat_rows)
-            fig_heatmap = go.Figure(
-                go.Heatmap(
-                    z=heat_rows,
-                    x=meses_periodo,
-                    y=heat_labels,
-                    zmin=0,
-                    zmax=max(120, maximo_heatmap),
-                    colorscale=[
-                        [0.00, "#7f1d1d"],
-                        [0.58, "#ef4444"],
-                        [0.70, "#f97316"],
-                        [0.80, "#eab308"],
-                        [0.90, "#10b981"],
-                        [1.00, "#22c55e"],
-                    ],
-                    colorbar=dict(title="Cumpl. %"),
-                    hovertemplate=(
-                        "%{y}<br>%{x}: %{z:.0f}%<extra></extra>"
-                    ),
-                )
-            )
-            fig_heatmap.update_layout(title=dict(text=""))
-            fig_heatmap.update_xaxes(title="Mes")
-            fig_heatmap.update_yaxes(title="", automargin=True)
-
-            alto_heatmap = max(
-                420,
-                min(880, 160 + len(heat_labels) * 31),
-            )
-
-            st.plotly_chart(
-                aplicar_layout_fig(fig_heatmap, height=alto_heatmap),
-                use_container_width=True,
-                config={"displaylogo": False},
-                key="heatmap_cumplimientos_sso",
-            )
-        else:
-            st.info("No existen datos para generar el mapa de calor.")
 
 def pagina_ops(datos, filtros):
     """
@@ -6923,7 +6953,6 @@ def pagina_capacitaciones(datos, filtros):
         cerradas = int((estados == "Cerrada").sum())
         pendientes = int((estados == "Pendiente").sum())
         en_proceso = int((estados == "En proceso").sum())
-        pendientes_en_proceso = pendientes + en_proceso
 
         # El avance se calcula usando la columna Vencimiento de la planilla y
         # la fecha actual. Solo entran al cálculo las capacitaciones cuyo plazo
@@ -6945,7 +6974,8 @@ def pagina_capacitaciones(datos, filtros):
         )
     else:
         cerradas = 0
-        pendientes_en_proceso = 0
+        pendientes = 0
+        en_proceso = 0
         total_a_fecha = 0
         cerradas_a_fecha = 0
         avance_a_fecha = 0.0
@@ -6958,10 +6988,12 @@ def pagina_capacitaciones(datos, filtros):
     with c2:
         kpi_card("✅", "Cerradas", numero(cerradas), "Estado informado")
     with c3:
-        kpi_card(
+        kpi_card_dividida(
             "🟠",
-            "Pendientes / En proceso",
-            numero(pendientes_en_proceso),
+            "Pendientes",
+            numero(pendientes),
+            "En proceso",
+            numero(en_proceso),
             "Seguimiento requerido",
         )
     with c4:
