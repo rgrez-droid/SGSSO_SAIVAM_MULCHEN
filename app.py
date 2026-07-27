@@ -50,7 +50,7 @@ AUTOR = "Ricardo Grez"
 EMPRESA = "SAIVAM"
 CONTRATO = "CMPC Mulchén"
 VERSION = "1.4.26"
-REVISION_CODIGO = "27-07-2026-R54-PROTOCOLOS-MINSAL-PDT"
+REVISION_CODIGO = "27-07-2026-R55-KPI-RESUMEN-COMITE-PARITARIO"
 
 print(
     f"[SSO] Ejecutando archivo corregido: {os.path.abspath(__file__)} "
@@ -5077,6 +5077,7 @@ def pagina_panel_general(datos, filtros):
     programa = datos.get("Programa_Anual", pd.DataFrame()).copy()
     reconocimientos = datos.get("Reconocimientos", pd.DataFrame()).copy()
     certificaciones = datos.get("Certificaciones", pd.DataFrame()).copy()
+    comite_paritario = datos.get("Comite_Paritario", pd.DataFrame()).copy()
     config = datos.get("Configuracion", pd.DataFrame())
 
     # =============================================================
@@ -5290,6 +5291,64 @@ def pagina_panel_general(datos, filtros):
         reconocimientos_entregados = 0
         personas_reconocidas = 0
 
+    # Comité Paritario: resumen consistente con su módulo específico.
+    # El avance considera exclusivamente las actividades exigibles a la fecha,
+    # usando Fecha_Compromiso y, cuando está vacía, la columna Fecha.
+    if comite_paritario is None:
+        comite_paritario = pd.DataFrame()
+
+    if not comite_paritario.empty:
+        comite_paritario = comite_paritario.copy()
+        estados_cphs = (
+            comite_paritario.get("Estado", pd.Series("", index=comite_paritario.index))
+            .fillna("")
+            .apply(estado_base)
+            .replace({"Vencida": "Pendiente"})
+        )
+
+        total_cphs = int(len(comite_paritario))
+        cerradas_cphs = int(estados_cphs.eq("Cerrada").sum())
+        en_proceso_cphs = int(estados_cphs.eq("En proceso").sum())
+        pendientes_cphs = int(estados_cphs.eq("Pendiente").sum())
+
+        fecha_exigible_cphs = pd.Series(
+            pd.NaT,
+            index=comite_paritario.index,
+            dtype="datetime64[ns]",
+        )
+        if "Fecha_Compromiso" in comite_paritario.columns:
+            fecha_exigible_cphs = comite_paritario["Fecha_Compromiso"].apply(
+                convertir_fecha
+            )
+        if "Fecha" in comite_paritario.columns:
+            fecha_registro_cphs = comite_paritario["Fecha"].apply(convertir_fecha)
+            fecha_exigible_cphs = fecha_exigible_cphs.fillna(fecha_registro_cphs)
+
+        exigibles_cphs = (
+            fecha_exigible_cphs.notna()
+            & fecha_exigible_cphs.dt.normalize().le(hoy_panel)
+        )
+        if not exigibles_cphs.any() and total_cphs > 0:
+            exigibles_cphs = pd.Series(True, index=comite_paritario.index)
+
+        total_cphs_exigible = int(exigibles_cphs.sum())
+        cerradas_cphs_exigible = int(
+            estados_cphs.loc[exigibles_cphs].eq("Cerrada").sum()
+        )
+        avance_cphs = (
+            cerradas_cphs_exigible / total_cphs_exigible * 100
+            if total_cphs_exigible
+            else 0.0
+        )
+    else:
+        total_cphs = 0
+        cerradas_cphs = 0
+        en_proceso_cphs = 0
+        pendientes_cphs = 0
+        total_cphs_exigible = 0
+        cerradas_cphs_exigible = 0
+        avance_cphs = 0.0
+
     # =============================================================
     # PRESENTACIÓN DEL PANEL
     # =============================================================
@@ -5457,6 +5516,18 @@ def pagina_panel_general(datos, filtros):
                 "Indicador principal": f"{total_reconocimientos} registros",
                 "Resultado al corte": f"{reconocimientos_entregados} entregados",
                 "Seguimiento": f"{personas_reconocidas} personas reconocidas durante {anio_panel}",
+            },
+            {
+                "Módulo": "Comité Paritario",
+                "Indicador principal": porcentaje(avance_cphs),
+                "Resultado al corte": (
+                    f"{cerradas_cphs_exigible}/{total_cphs_exigible} "
+                    "actividades exigibles cerradas"
+                ),
+                "Seguimiento": (
+                    f"{en_proceso_cphs} en proceso · {pendientes_cphs} pendientes · "
+                    f"{total_cphs} programadas"
+                ),
             },
             {
                 "Módulo": "Certificaciones",
