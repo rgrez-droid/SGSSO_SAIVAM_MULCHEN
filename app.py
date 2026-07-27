@@ -50,7 +50,7 @@ AUTOR = "Ricardo Grez"
 EMPRESA = "SAIVAM"
 CONTRATO = "CMPC Mulchén"
 VERSION = "1.4.26"
-REVISION_CODIGO = "27-07-2026-R55-KPI-RESUMEN-COMITE-PARITARIO"
+REVISION_CODIGO = "27-07-2026-R56-TARJETA-KPI-COMITE-PARITARIO"
 
 print(
     f"[SSO] Ejecutando archivo corregido: {os.path.abspath(__file__)} "
@@ -5370,8 +5370,8 @@ def pagina_panel_general(datos, filtros):
         unsafe_allow_html=True,
     )
 
-    # Seis indicadores estratégicos, uno por cada módulo considerado.
-    c1, c2, c3 = st.columns(3, gap="medium")
+    # Siete indicadores estratégicos, incluyendo el avance del Comité Paritario.
+    c1, c2, c3, c4 = st.columns(4, gap="medium")
     with c1:
         kpi_card(
             "🛡️",
@@ -5393,23 +5393,33 @@ def pagina_panel_general(datos, filtros):
             porcentaje(avance_prg),
             f"{cerradas_prg} de {total_prg_exigible} actividades exigibles al {fecha_corte}",
         )
-
-    c4, c5, c6 = st.columns(3, gap="medium")
     with c4:
+        kpi_card(
+            "👥",
+            "Avance Comité Paritario",
+            porcentaje(avance_cphs),
+            (
+                f"{cerradas_cphs_exigible} de {total_cphs_exigible} exigibles cerradas · "
+                f"{en_proceso_cphs} en proceso · {pendientes_cphs} pendientes"
+            ),
+        )
+
+    c5, c6, c7 = st.columns(3, gap="medium")
+    with c5:
         kpi_card(
             "🎓",
             "Avance capacitaciones",
             porcentaje(avance_cap),
             f"{cerradas_cap} de {total_cap_exigible} vencidas/exigibles al {fecha_corte}",
         )
-    with c5:
+    with c6:
         kpi_card(
             "📝",
             "Reportes abiertos",
             numero(reportes_abiertos),
             f"{total_reportes} registros {anio_panel} · {reportes_cerrados} cerrados",
         )
-    with c6:
+    with c7:
         kpi_card(
             "📜",
             "Certificaciones en regla",
