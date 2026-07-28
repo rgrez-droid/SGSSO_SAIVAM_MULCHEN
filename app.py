@@ -49,8 +49,8 @@ st.markdown(
 AUTOR = "Ricardo Grez"
 EMPRESA = "SAIVAM"
 CONTRATO = "CMPC Mulchén"
-VERSION = "1.4.26"
-REVISION_CODIGO = "27-07-2026-R56-TARJETA-KPI-COMITE-PARITARIO"
+VERSION = "1.4.27"
+REVISION_CODIGO = "28-07-2026-R57-TABLA-ACTAS-CPHS"
 
 print(
     f"[SSO] Ejecutando archivo corregido: {os.path.abspath(__file__)} "
@@ -7585,6 +7585,55 @@ def pagina_comite_paritario(datos, filtros):
         card_inicio()
         grafico_barra(df, "Tipo_Reunion", "Actividades por tipo", orientacion="h")
         card_fin()
+
+    # Tabla independiente para las actas mensuales incorporadas en la hoja
+    # Comité Paritario. Se reconocen tanto por el tipo de reunión como por el
+    # nombre del tema, para mantener compatibilidad si cambia levemente el texto
+    # utilizado en Google Sheets.
+    mascara_actas = pd.Series(False, index=df.index)
+
+    if "Tipo_Reunion" in df.columns:
+        tipo_reunion_normalizado = df["Tipo_Reunion"].fillna("").apply(normalizar_texto)
+        mascara_actas = mascara_actas | tipo_reunion_normalizado.str.contains(
+            r"reunion_mensual|acta",
+            regex=True,
+            na=False,
+        )
+
+    if "Tema" in df.columns:
+        tema_normalizado = df["Tema"].fillna("").apply(normalizar_texto)
+        mascara_actas = mascara_actas | (
+            tema_normalizado.str.contains("acta", regex=False, na=False)
+            & tema_normalizado.str.contains(
+                r"cphs|comite_paritario|reunion",
+                regex=True,
+                na=False,
+            )
+        )
+
+    actas_cphs = df.loc[mascara_actas].copy()
+
+    if not actas_cphs.empty:
+        columnas_orden_actas = [
+            columna
+            for columna in ["Fecha", "Tema"]
+            if columna in actas_cphs.columns
+        ]
+        if columnas_orden_actas:
+            actas_cphs = actas_cphs.sort_values(
+                by=columnas_orden_actas,
+                ascending=True,
+                na_position="last",
+            ).reset_index(drop=True)
+
+    panel_titulo("Actas de Reuniones Mensuales del CPHS")
+    tabla_limpia(
+        actas_cphs,
+        ["Fecha", "Tipo_Reunion", "Tema", "Estado", "Evidencia"],
+        height=245,
+        centrar_todo=False,
+        alinear_arriba_columnas=["Tema"],
+    )
 
     panel_titulo("Detalle de Actividades del Comité Paritario")
     tabla_limpia(
