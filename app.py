@@ -49,8 +49,8 @@ st.markdown(
 AUTOR = "Ricardo Grez"
 EMPRESA = "SAIVAM"
 CONTRATO = "CMPC Mulchén"
-VERSION = "1.4.27"
-REVISION_CODIGO = "28-07-2026-R57-TABLA-ACTAS-CPHS"
+VERSION = "1.4.28"
+REVISION_CODIGO = "29-07-2026-R58-CERTIFICACIONES-SIN-FECHA"
 
 print(
     f"[SSO] Ejecutando archivo corregido: {os.path.abspath(__file__)} "
@@ -504,6 +504,12 @@ def estado_base(valor):
     texto = normalizar_texto(valor)
     if texto in ["", "nan", "none", "nat", "sin_estado"]:
         return "Sin estado"
+    if (
+        "sin_certificacion" in texto
+        or "no_certificado" in texto
+        or "pendiente_certificacion" in texto
+    ):
+        return "Sin certificación"
     if "sin_vencimiento" in texto:
         return "Sin vencimiento"
     if "por_vencer" in texto or "proximo_a_vencer" in texto:
@@ -636,7 +642,14 @@ def preparar_programa_anual(df):
 
 
 def preparar_certificaciones(df):
-    """Limpia la hoja y calcula vigencia y días restantes."""
+    """
+    Limpia la hoja y calcula vigencia y días restantes.
+
+    Cuando un equipo o herramienta todavía no posee certificado, la planilla
+    puede dejar Vencimiento vacío e informar Estado como "Sin certificación".
+    Ese estado se conserva y no se intenta convertir el valor vacío en un
+    número de días.
+    """
     salida = df.copy()
 
     columnas_clave = [
@@ -663,11 +676,23 @@ def preparar_certificaciones(df):
 
     if "Vencimiento" not in salida.columns:
         salida["Vencimiento"] = pd.NaT
+    if "Estado" not in salida.columns:
+        salida["Estado"] = ""
 
+    # Guarda el estado original antes de recalcular la vigencia. Esto permite
+    # reconocer los nuevos registros sin fecha de vencimiento.
+    estado_informado = salida["Estado"].fillna("").astype(str).str.strip()
     salida["Vencimiento"] = salida["Vencimiento"].apply(convertir_fecha)
 
-    def calcular_vigencia(fecha):
+    def calcular_vigencia(fecha, estado_sheet):
         if pd.isna(fecha):
+            estado_normalizado = normalizar_texto(estado_sheet)
+            if (
+                "sin_certificacion" in estado_normalizado
+                or "no_certificado" in estado_normalizado
+                or "pendiente_certificacion" in estado_normalizado
+            ):
+                return "Sin certificación", pd.NA
             return "Sin vencimiento", pd.NA
 
         dias = int((fecha.normalize() - HOY).days)
@@ -678,7 +703,17 @@ def preparar_certificaciones(df):
             return "Por vencer", dias
         return "Vigente", dias
 
-    resultados = salida["Vencimiento"].apply(calcular_vigencia)
+    resultados = pd.Series(
+        [
+            calcular_vigencia(fecha, estado_sheet)
+            for fecha, estado_sheet in zip(
+                salida["Vencimiento"],
+                estado_informado,
+            )
+        ],
+        index=salida.index,
+        dtype="object",
+    )
     salida["Estado"] = resultados.apply(lambda resultado: resultado[0])
     salida["Dias_Para_Vencer"] = pd.array(
         resultados.apply(lambda resultado: resultado[1]),
@@ -7830,7 +7865,13 @@ def pagina_certificaciones(datos, filtros):
             "Dias_Para_Vencer": "Días para vencer",
             "Ruta_Link": "Ruta / link",
         }
-    ).fillna("")
+    )
+
+    # Pandas 2.x/3.x no permite rellenar una columna nullable Int64 con texto.
+    # Se convierte la tabla de presentación a object antes de reemplazar los
+    # valores nulos. Así, los equipos sin vencimiento o sin certificación se
+    # muestran con celdas vacías sin generar TypeError.
+    mostrar = mostrar.astype("object").where(pd.notna(mostrar), "")
 
     # Tabla HTML compacta para que las nueve columnas entren en la página.
     st.markdown(
